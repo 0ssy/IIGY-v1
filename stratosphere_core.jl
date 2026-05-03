@@ -176,6 +176,22 @@ function run_iggy()
             continue
         end
 
+        # ───── DATA ─────
+        price = 0.0
+        try
+            price = get_price(symbol)
+        catch e
+            println("⚠️ Network glitch, retrying... ($e)")
+            sleep(2)
+            continue
+        end
+
+        if price <= 0.0
+            continue
+        end
+        
+        push!(prices, price)
+
         # Decision
         signal = decide(core, prices)
         if signal == 0
