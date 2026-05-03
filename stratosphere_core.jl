@@ -139,7 +139,7 @@ function update_weights!(core, pnl)
             df = CSV.read("iggy_trade_log.csv", DataFrame)
             if !isempty(df) && "pnl" in names(df)
                 # Take the last 50 historical PNLs from the log
-                historical_pnls = tail(df.pnl, 50)
+                historical_pnls = df.pnl[max(1, end-49):end]
                 # Merge historical data with current session data
                 core.returns = vcat(historical_pnls, core.returns)
             end
@@ -211,6 +211,7 @@ end
 # ─────────────────────────────────────────
 
 function run_iggy()
+    # Initialize IGGY with start equity and initial weights
     core = IGGY(1.0, 1.0, 0.33, 0.33, 0.34, Float64[])
     symbol = "BTCUSDT"
     prices = Float64[]
@@ -218,7 +219,7 @@ function run_iggy()
     println(">>> IGGY v17.4 STABLE QUANT ENGINE ONLINE")
 
     while true
-        # Risk Check
+        # 1. Risk Check: Monitoring Drawdown
         core.peak_equity = max(core.peak_equity, core.equity)
         dd = (core.equity - core.peak_equity) / core.peak_equity
         if dd < MAX_DRAWDOWN
@@ -226,71 +227,54 @@ function run_iggy()
             break
         end
 
-        # Data Fetch
-        p = get_price(symbol)
-        if p == 0.0; sleep(1); continue end
-        push!(prices, p)
+        # 2. Data Fetch: Get current price
+        price = get_price(symbol)
+        if price <= 0.0
+            println("⚠️ Network glitch, retrying...")
+            sleep(2)
+            continue 
+        end
+        
+        push!(prices, price)
         length(prices) > 120 && popfirst!(prices)
 
+        # 3. Warmup Phase
         if length(prices) < WARMUP
             println("⏳ WARMUP $(length(prices))/$WARMUP")
             sleep(1)
             continue
         end
-        println("💓 Heartbeat: $(Dates.now()) | Price: $p")
-         # Forces the terminal to show the text immediately
+
+        println("💓 Heartbeat: $(Dates.now()) | Price: $price")
         flush(stdout)
-        # ───── DATA ─────
-        price = 0.0
-        try
-            price = get_price(symbol)
-        catch e
-            println("⚠️ Network glitch, retrying... ($e)")
-            sleep(2)
-            continue
-        end
 
-        if price <= 0.0
-            continue
-        end
-        
-        push!(prices, price)
-
-        # Decision
+        # 4. Decision Engine
         signal = decide(core, prices)
         if signal == 0
             sleep(1)
             continue
         end
 
-        # Trade Execution
-        entry = p
+        # 5. Trade Execution
+        entry = price
         println("🚀 SIGNAL: $signal | ENTRY: $entry")
         sleep(HOLD_TIME)
 
-       
-        
+        # 6. Exit & Results
         exit = get_price(symbol)
-        if exit == 0.0; exit = entry end # Safety if exit fetch fails
+        if exit <= 0.0; exit = entry end # Safety fallback
         
-        # Calculate Results
-        raw_ret = (exit - entry) / entry
-        pnl = raw_ret * signal * POSITION_SIZE
+        pnl = execute(entry, exit, signal)
         
-        core.equity *= (1.0 + pnl)
-        update_weights!(core, pnl)
-         pnl = execute(entry, exit, signal)
-            equity += pnl
+        # 7. State Update & Learning
+        core.equity += pnl
+        update_weights!(core, pnl) # Ensure the 'tail' fix is in this function!
 
-            # Add this line:
-            log_trade(signal, entry, exit, pnl, equity, weights)
-
-
+        # 8. Logging & Telemetry
+        weights_array = [core.w_trend, core.w_range, core.w_vol]
+        log_trade(signal, entry, exit, pnl, core.equity, weights_array)
 
         @printf("📊 EQ: %.4f | PNL: %.4f | W: %.2f, %.2f, %.2f\n", 
                 core.equity, pnl, core.w_trend, core.w_range, core.w_vol)
-        println("📊 EQ: $(round(equity, digits=4)) | PNL: $(round(pnl, digits=4))")
     end
 end
-
-run_iggy()
