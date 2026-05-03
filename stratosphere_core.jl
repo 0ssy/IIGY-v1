@@ -6,7 +6,8 @@
 
 
 # New line
-using HTTP, JSON, Dates, Random, Statistics, Printf
+using HTTP, JSON, Dates, Random, Statistics, Printf, Dates, Logging
+using CSV, DataFrames
 
 # ─────────────────────────────────────────
 # CONFIG
@@ -123,13 +124,36 @@ end
 # SAFE LEARNING (No NaN/Div0)
 # ─────────────────────────────────────────
 
+
+
 function update_weights!(core, pnl)
+    # 1. Protection against bad data
     if isnan(pnl) || isinf(pnl); return end
 
+    # 2. Append new PNL to current session memory
     push!(core.returns, pnl)
-    length(core.returns) > 50 && popfirst!(core.returns)
+    
+    # 3. "Log-Learning": If session memory is low, try to fill from CSV
+    if length(core.returns) < 10 && isfile("iggy_trade_log.csv")
+        try
+            df = CSV.read("iggy_trade_log.csv", DataFrame)
+            if !isempty(df) && "pnl" in names(df)
+                # Take the last 50 historical PNLs from the log
+                historical_pnls = tail(df.pnl, 50)
+                # Merge historical data with current session data
+                core.returns = vcat(historical_pnls, core.returns)
+            end
+        catch e
+            @warn "Could not read logs for learning: $e"
+        end
+    end
 
-    # Need minimum samples for Sharpe calculation
+    # Keep memory manageable (rolling window of 100)
+    if length(core.returns) > 100
+        core.returns = core.returns[end-99:end]
+    end
+
+    # 4. Math Check (Minimum samples for Sharpe)
     length(core.returns) < 10 && return
 
     μ = mean(core.returns)
@@ -138,15 +162,16 @@ function update_weights!(core, pnl)
     # Avoid division by zero
     if σ < 1e-8; return end
 
+    # Sharpe-based adjustment
     sharpe = clamp(μ / σ, -2.0, 2.0)
-    lr = 0.03
+    lr = 0.03 # Learning Rate
 
-    # Update weights based on Sharpe performance
+    # Update weights
     core.w_trend += lr * sharpe
     core.w_range += lr * sharpe
     core.w_vol   += lr * sharpe
 
-    # Normalization (Crucial for stability)
+    # 5. Normalization (Crucial for stability)
     s = abs(core.w_trend) + abs(core.w_range) + abs(core.w_vol)
 
     if s < 1e-8
@@ -157,6 +182,29 @@ function update_weights!(core, pnl)
         core.w_vol   /= s
     end
 end
+# ─────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────
+
+
+function log_trade(signal, entry, exit, pnl, eq, weights)
+    file_path = "iggy_trade_log.csv"
+    
+    # Create header if file doesn't exist
+    if !isfile(file_path)
+        open(file_path, "w") do f
+            write(f, "timestamp,signal,entry,exit,pnl,equity,w1,w2,w3\n")
+        end
+    end
+
+    # Append the trade data
+    open(file_path, "a") do f
+        timestamp = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
+        weights_str = join(round.(weights, digits=4), ",")
+        write(f, "$timestamp,$signal,$entry,$exit,$pnl,$eq,$weights_str\n")
+    end
+end
+
 
 # ─────────────────────────────────────────
 # RUNTIME
@@ -190,6 +238,8 @@ function run_iggy()
             continue
         end
         println("💓 Heartbeat: $(Dates.now()) | Price: $p")
+        println("💓 Heartbeat: $(Dates.now()) | Price: $price")
+        flush(stdout) # Forces the terminal to show the text immediately
         # ───── DATA ─────
         price = 0.0
         try
@@ -217,6 +267,8 @@ function run_iggy()
         entry = p
         println("🚀 SIGNAL: $signal | ENTRY: $entry")
         sleep(HOLD_TIME)
+
+       
         
         exit = get_price(symbol)
         if exit == 0.0; exit = entry end # Safety if exit fetch fails
@@ -227,9 +279,17 @@ function run_iggy()
         
         core.equity *= (1.0 + pnl)
         update_weights!(core, pnl)
+         pnl = execute(entry, exit, signal)
+            equity += pnl
+
+            # Add this line:
+            log_trade(signal, entry, exit, pnl, equity, weights)
+
+
 
         @printf("📊 EQ: %.4f | PNL: %.4f | W: %.2f, %.2f, %.2f\n", 
                 core.equity, pnl, core.w_trend, core.w_range, core.w_vol)
+        println("📊 EQ: $(round(equity, digits=4)) | PNL: $(round(pnl, digits=4))")
     end
 end
 
