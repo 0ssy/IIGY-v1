@@ -237,9 +237,9 @@ function run_iggy()
             sleep(1)
             continue
         end
-        println("💓 Heartbeat: $(Dates.now()) | Price: $p")
         println("💓 Heartbeat: $(Dates.now()) | Price: $price")
-        flush(stdout) # Forces the terminal to show the text immediately
+         # Forces the terminal to show the text immediately
+        flush(stdout)
         # ───── DATA ─────
         price = 0.0
         try
