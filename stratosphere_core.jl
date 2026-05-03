@@ -16,7 +16,7 @@ const BASE_URL = "https://api.binance.com"
 const MAX_DRAWDOWN = -0.4
 const WARMUP = 40
 const POSITION_SIZE = 5.0
-const HOLD_TIME = 10   # Seconds to hold before checking exit
+const HOLD_TIME = 30   # Seconds to hold before checking exit
 
 # ─────────────────────────────────────────
 # STATE
@@ -36,15 +36,22 @@ end
 # ─────────────────────────────────────────
 
 function get_price(symbol)
-    try
-        url = "$BASE_URL/api/v3/ticker/price?symbol=$symbol"
-        res = HTTP.get(url, retry=true)
-        data = JSON.parse(String(res.body))
-        return parse(Float64, data["price"])
-    catch e
-        @warn "Price fetch failed: $e"
-        return 0.0
+    max_retries = 3
+    for i in 1:max_retries
+        try
+            url = "$BASE_URL/api/v3/ticker/price?symbol=$symbol"
+            res = HTTP.get(url, readtimeout=5, connect_timeout=5)
+            data = JSON.parse(String(res.body))
+            return parse(Float64, data["price"])
+        catch e
+            if i == max_retries
+                @warn "Final attempt failed for $symbol: $e"
+                return 0.0
+            end
+            sleep(1 * i) # Wait longer with each failure
+        end
     end
+    return 0.0
 end
 
 # ─────────────────────────────────────────
@@ -105,6 +112,11 @@ function decide(core, p)
     return abs(score) < 0.25 ? 0 : Int(sign(score))
 end
 
+function execute(entry, exit, signal)
+    fee = 0.001 # 0.1% Binance fee
+    ret = (exit - entry) / entry
+    return (ret * signal * POSITION_SIZE) - (fee * 2) # Entry fee + Exit fee
+end
 # ─────────────────────────────────────────
 # SAFE LEARNING (No NaN/Div0)
 # ─────────────────────────────────────────
