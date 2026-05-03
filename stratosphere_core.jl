@@ -16,7 +16,7 @@ const BASE_URL = "https://api.binance.com"
 const MAX_DRAWDOWN = -0.4
 const WARMUP = 40
 const POSITION_SIZE = 5.0
-const HOLD_TIME = 30   # Seconds to hold before checking exit
+const HOLD_TIME = 60   # Seconds to hold before checking exit
 
 # ─────────────────────────────────────────
 # STATE
@@ -109,7 +109,7 @@ function decide(core, p)
     score = (core.w_trend * t) + (core.w_range * r) + (core.w_vol * v)
 
     # Ignore weak/noise signals
-    return abs(score) < 0.25 ? 0 : Int(sign(score))
+    return abs(score) < 0.40 ? 0 : Int(sign(score))
 end
 
 # Inside stratosphere_core.jl
