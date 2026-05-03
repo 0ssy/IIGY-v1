@@ -1,0 +1,78 @@
+Domain,Sub-Category,Focus_Area,Creator_Priority
+Language,East Asian,Mandarin & Japanese (Tech Fluency),High
+Language,Global,English Mastery (Technical + Persuasive Writing),Critical
+Language,Regional,Swahili (Localization & East Africa Markets),High
+Language,Programming,Code Readability & Documentation Standards,High
+Language,Communication,Negotiation & Technical Explanation,High
+Business,SaaS & Scaling,Business Automation (Catalyst Solutions),Critical
+Business,Startups,Lean Startup & MVP Validation,High
+Business,Monetization,Subscription Models / Marketplaces / APIs,Critical
+Business,Growth,Hacking & Viral Loops,High
+Business,Operations,Systemized Business Processes & SOPs,High
+Business,Finance,Revenue Forecasting & Cost Control,High
+Business,Legal,Business Structures & Compliance,Medium
+Technology,Software Eng,Python/C++/Julia/Java/SQL,High
+Technology,Web Dev,Frontend + Backend (React, Node, APIs),High
+Technology,Mobile Dev,Android (Kotlin/Java),High
+Technology,System Design,Scalable Architecture (Microservices),Critical
+Technology,Operating Systems,Process Management & Memory Handling,High
+Technology,Databases,SQL/NoSQL Design & Optimization,High
+Technology,APIs,REST/GraphQL Design & Integration,High
+Technology,Artificial Intelligence,LLMs / Agents / Prompt Systems,Critical
+Technology,Machine Learning,Supervised + Reinforcement Learning,High
+Technology,Deep Learning,Neural Networks & Transformers,High
+Technology,Data Science,Data Pipelines / Pandas / Visualization,High
+Technology,Data Engineering,ETL Pipelines / Streaming Systems,High
+Technology,Computer Vision,Image Recognition & Processing,Medium
+Technology,NLP,Text Processing & Embeddings,High
+Finance,Algorithmic,Forex (EUR/USD) & Crypto,High
+Finance,Quantitative,Backtesting & Strategy Optimization,High
+Finance,Risk Management,Drawdown Control & Position Sizing,Critical
+Finance,DeFi,Smart Contracts & Tokenomics,Medium
+Finance,Macroeconomics,Interest Rates & Global Markets,High
+Security,Cyber-Defense,System Optimization & DRM Troubleshooting,Medium
+Security,Offensive Security,Pen Testing / Ethical Hacking,High
+Security,Cloud Security,Identity & Access Management,High
+Security,Encryption,Cryptography & Secure Systems,High
+Security,Monitoring,Threat Detection & Logging Systems,High
+Infrastructure,Cloud,AWS / Azure / GCP Fundamentals,Critical
+Infrastructure,DevOps,CI/CD Pipelines & Automation,High
+Infrastructure,Containers,Docker & Kubernetes,High
+Infrastructure,Monitoring,Logging & Observability Systems,High
+Infrastructure,Scaling,Load Balancing & Auto-Scaling,High
+Infrastructure,Networking,TCP/IP / DNS / Routing,High
+Infrastructure,IoT & Automation,Smart Apartment / Skillbridge,Medium
+Infrastructure,Distributed Systems,Consensus & Fault Tolerance,High
+Infrastructure,Edge Computing,Low-Latency Systems,Medium
+Psychology,Behavioral,Cognitive Biases & Decision Making,High
+Psychology,Persuasion,Sales Psychology & Influence,Critical
+Psychology,UX/UI,Human-Centered Design,High
+Psychology,Habits,Behavior Formation & Retention Systems,High
+Psychology,Social Dynamics,Community Building & Engagement,High
+Media,Content Creation,Short-form + Long-form Strategy,High
+Media,Social Platforms,Instagram / TikTok / X Algorithms,High
+Media,Branding,Identity & Storytelling,Critical
+Media,SEO,Search Engine Optimization & Ranking,High
+Media,Copywriting,Conversion-Focused Writing,High
+Product,Design,User Experience & Interfaces,High
+Product,Management,Roadmaps & Feature Prioritization,High
+Product,Analytics,A/B Testing & Metrics,High
+Product,Feedback,User Feedback Loops & Iteration,High
+Product,Retention,Engagement & Stickiness Systems,Critical
+Automation,Workflows,n8n / Zapier / API Orchestration,High
+Automation,Agents,Autonomous Task Execution Systems,Critical
+Automation,Scripting,Task Automation (Python/Bash),High
+Automation,Integration,System-to-System Communication,High
+Learning,Meta,Learn-how-to-learn Algorithms,Critical
+Learning,Memory,Vector DBs / Knowledge Retrieval,Critical
+Learning,Optimization,Self-Improving Feedback Loops,Critical
+Learning,Evaluation,Model Benchmarking & Testing,High
+Learning,Adaptation,Dynamic Strategy Adjustment,Critical
+Execution,Decision Systems,Rule Engines & Action Triggers,Critical
+Execution,Planning,Task Decomposition & Scheduling,High
+Execution,Monitoring,Performance Tracking & Alerts,High
+Execution,Recovery,Error Handling & Self-Healing Systems,Critical
+Expansion,Localization,Multi-Language System Adaptation,High
+Expansion,Payments,Global Payment Gateways & APIs,Critical
+Expansion,Compliance,Regional Regulations & Data Laws,High
+Expansion,Distribution,Multi-Platform Deployment (Web/Mobile/API),Critical

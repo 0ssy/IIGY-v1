@@ -1,0 +1,313 @@
+📁 quant_expansion.txt
+
+Order Flow Imbalance (OFI):
+
+Let:
+Bid_i(t), Ask_i(t) = bid/ask sizes at level i
+ΔBidPrice_i = BidPrice_i(t) - BidPrice_i(t-1)
+ΔAskPrice_i = AskPrice_i(t) - AskPrice_i(t-1)
+
+OFI_t = Σ_i [BidSize_i * 𝟙(ΔBidPrice_i ≥ 0)] − Σ_i [AskSize_i * 𝟙(ΔAskPrice_i ≤ 0)]
+
+Alternative continuous approximation:
+OFI_t ≈ Σ (ΔBidVolume - ΔAskVolume)
+
+Interpretation:
+OFI_t > 0 → buy-side dominance
+OFI_t < 0 → sell-side dominance
+
+Short-term price impact model:
+ΔP_t = β · OFI_t + ε_t
+
+β estimated via regression:
+β = Cov(OFI, ΔP) / Var(OFI)
+
+Microstructure assumption:
+Market orders consume liquidity → imbalance precedes price move
+
+Noise filtering:
+OFI_smooth = EMA(OFI, α)
+
+Crypto Funding Rates:
+
+Funding rate:
+F_t = Premium Index + clamp(Interest Rate - Premium Index, ±cap)
+
+Premium Index:
+P_t = (Mark Price - Index Price) / Index Price
+
+Interpretation:
+F_t > 0 → longs pay shorts
+F_t < 0 → shorts pay longs
+
+Overleveraged condition:
+F_t >> μ_F → long crowding
+
+Expected outcome:
+if F_t high:
+probability(long squeeze) ↑
+
+Liquidation cascade model:
+Let L = liquidation threshold
+If price hits L:
+forced selling → ΔV spike → further price drop
+
+Recursive effect:
+P_{t+1} = P_t - k * LiquidationVolume_t
+
+Signal:
+Short when:
+F_t > threshold AND momentum weakening
+
+Mean Reversion (Ornstein-Uhlenbeck):
+
+dX_t = θ(μ - X_t)dt + σ dW_t
+
+Discretized:
+X_{t+1} = X_t + θ(μ - X_t)Δt + σ√Δt ε_t
+
+Stationary distribution:
+X ~ N(μ, σ² / (2θ))
+
+Half-life:
+τ = ln(2) / θ
+
+Z-score:
+Z_t = (X_t - μ) / σ
+
+Trading rule:
+if Z_t > z_high:
+short
+if Z_t < z_low:
+long
+
+Pairs trading:
+Spread:
+S_t = log(P_A) - log(P_B)
+
+Apply OU on S_t
+
+Cointegration condition:
+residual stationary
+
+Black-Litterman Model:
+
+Market equilibrium:
+π = δ Σ w_mkt
+
+Posterior return:
+E[R] = [(τΣ)^-1 + P^T Ω^-1 P]^-1 [(τΣ)^-1 π + P^T Ω^-1 Q]
+
+Where:
+Σ = covariance matrix
+τ = uncertainty scaling
+P = pick matrix
+Q = investor views
+Ω = diagonal covariance of views
+
+Portfolio weights:
+w* = (1/δ) Σ^-1 E[R]
+
+Advantage:
+Combines subjective + objective data
+
+📁 engineering_mastery.jl
+
+Zero-Copy Networking:
+
+using Mmap
+
+function read_stream(file)
+io = open(file)
+data = Mmap.mmap(io)
+return data
+end
+
+Benefit:
+
+No buffer copy
+Direct memory access
+
+Latency:
+O(1) access after mapping
+
+SIMD Vectorization:
+
+function simd_add!(y, x)
+@inbounds @simd for i in eachindex(x)
+y[i] += x[i]
+end
+end
+
+CPU executes multiple ops per cycle
+
+Alignment:
+Ensure arrays contiguous
+
+Distributed Systems (Idempotent Workers):
+
+Idempotency key:
+id = hash(event)
+
+function process(event)
+if seen(id)
+return
+end
+execute(event)
+mark_seen(id)
+end
+
+Raft outline:
+
+States:
+Follower, Candidate, Leader
+
+Leader election:
+timeout → request votes
+
+Log replication:
+leader → followers
+
+Consistency:
+majority commit
+
+Cache Locality:
+
+AoS:
+struct Trade
+price::Float32
+volume::Float32
+end
+
+Array{Trade}
+
+SoA:
+prices = Float32[]
+volumes = Float32[]
+
+Access pattern:
+SoA better for vectorization
+
+Cache line:
+~64 bytes
+
+Goal:
+maximize sequential access
+
+Ternary forward pass optimization:
+
+for i:
+y += (w[i] == 1)*x[i]
+y -= (w[i] == -1)*x[i]
+
+Avoid branching → use masks
+
+📁 polymath_nexus.txt
+
+Historical Cycles (Kondratiev Waves):
+
+Cycle length:
+~50–60 years
+
+Phases:
+
+Expansion
+Peak
+Recession
+Depression
+
+Drivers:
+
+Technological innovation
+Capital accumulation
+
+Mapping:
+Industrial Revolution → Wave 1
+Information Age → Wave 5
+
+Signal:
+Innovation spikes → long-term growth regimes
+
+Artistic Geometry:
+
+Golden Ratio:
+φ = (1 + √5)/2 ≈ 1.618
+
+Fibonacci:
+F_n = F_{n-1} + F_{n-2}
+
+Limit:
+lim(F_{n+1}/F_n) → φ
+
+Trading levels:
+0.382, 0.5, 0.618
+
+Use:
+Support/resistance estimation
+
+Spiral:
+r = ae^{bθ}
+
+Appears in:
+
+nature
+architecture
+visual composition
+
+Information Theory:
+
+Entropy:
+H(X) = -Σ P(x) log P(x)
+
+Properties:
+H ≥ 0
+Max when uniform distribution
+
+Market application:
+High entropy → randomness
+Low entropy → structure/trend
+
+Entropy rate:
+H_t = H(r_t | r_{t-1})
+
+Signal:
+if H ↓:
+predictability ↑
+
+KL divergence:
+D_KL(P||Q) = Σ P log(P/Q)
+
+Use:
+detect regime change
+
+Neuroscience of Learning:
+
+Hebbian rule:
+Δw = η x_i x_j
+
+If neurons co-activate → strengthen connection
+
+Ternary adaptation:
+
+if activation high:
+w → +1
+if inactive:
+w → 0
+if inverse:
+w → -1
+
+Plasticity constraint:
+|w| ≤ 1
+
+Continuous learning loop:
+
+for each input:
+compute activation
+update weights
+decay unused weights
+
+Stability:
+Normalize weights:
+w ← w / ||w||
+
+Avoid runaway growth

@@ -1,0 +1,5 @@
+iggy_snapshot.txt
+.venv/
+__pycache__/
+*.pyc
+*.env
