@@ -278,3 +278,4 @@ function run_iggy()
                 core.equity, pnl, core.w_trend, core.w_range, core.w_vol)
     end
 end
+run_iggy()
