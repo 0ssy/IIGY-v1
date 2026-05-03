@@ -112,10 +112,12 @@ function decide(core, p)
     return abs(score) < 0.25 ? 0 : Int(sign(score))
 end
 
+# Inside stratosphere_core.jl
 function execute(entry, exit, signal)
-    fee = 0.001 # 0.1% Binance fee
     ret = (exit - entry) / entry
-    return (ret * signal * POSITION_SIZE) - (fee * 2) # Entry fee + Exit fee
+    # Subtract 0.1% for entry and 0.1% for exit (standard Binance fees)
+    actual_pnl = (ret * signal * POSITION_SIZE) - 0.002 
+    return actual_pnl
 end
 # ─────────────────────────────────────────
 # SAFE LEARNING (No NaN/Div0)
@@ -187,7 +189,7 @@ function run_iggy()
             sleep(1)
             continue
         end
-
+        println("💓 Heartbeat: $(Dates.now()) | Price: $p")
         # ───── DATA ─────
         price = 0.0
         try
@@ -218,7 +220,7 @@ function run_iggy()
         
         exit = get_price(symbol)
         if exit == 0.0; exit = entry end # Safety if exit fetch fails
-
+        
         # Calculate Results
         raw_ret = (exit - entry) / entry
         pnl = raw_ret * signal * POSITION_SIZE
