@@ -1,98 +1,119 @@
 using HTTP, Gumbo, Cascadia, CSV, DataFrames, Dates, Printf
 
-# ── ROBUST KNOWLEDGE INGESTION ──────────────────────────────────────────────
-function ingest_domain_knowledge()
-    println(">>> IIGY: Repairing and Syncing with CSV...")
-    
-    # We use 'quotechar' to handle those pesky commas in parentheses
+# Include IggyOntology for knowledge graph integration
+include("iggy_ontology.jl")
+
+# ─────────────────────────────────────────
+# ROBUST KNOWLEDGE INGESTION
+# ─────────────────────────────────────────
+function ingest_domain_knowledge(kg::IggyOntology.KnowledgeGraph, domains_csv_path::String)
+    println("IIGY: Repairing and Syncing with Knowledge Domains...")
+    knowledge_map = []
     try
-        df = CSV.read("iggy_global_knowledge.csv", DataFrame, quotechar='"', escapechar='\\')
-        
-        knowledge_map = []
+        # Use 'quotechar' to handle those pesky commas in parentheses
+        df = CSV.read(domains_csv_path, DataFrame, quotechar='"', escapechar='\\')
+
         for row in eachrow(df)
             # Silently handle rows that might still be shifted
             area = ismissing(row.Focus_Area) ? "" : string(row.Focus_Area)
             priority = ismissing(row.Creator_Priority) ? "Low" : string(row.Creator_Priority)
             domain = ismissing(row.Domain) ? "General" : string(row.Domain)
-            
+
+            # Add facts to the Knowledge Graph
+            IggyOntology.add_entity!(kg, Symbol(domain), IggyOntology.TYPE_DOMAIN)
+            IggyOntology.add_fact!(kg, Symbol(domain), IggyOntology.PRED_HAS_FOCUS_AREA, Symbol(area))
+            IggyOntology.add_fact!(kg, Symbol(domain), IggyOntology.PRED_HAS_PRIORITY, Symbol(priority))
+
             push!(knowledge_map, (area=area, priority=priority, domain=domain))
         end
-        return knowledge_map
     catch e
-        println("CRITICAL ERROR reading CSV: Ensure no stray commas exist.")
+        println("CRITICAL ERROR reading domains CSV: Ensure no stray commas exist. Error: $e")
+        return []
+    end
+    println("IIGY: Knowledge domains ingested successfully.")
+    return knowledge_map
+end
+
+# ─────────────────────────────────────────
+# THE HUMAN-LIKE SEARCHER (Stealthy Crawler)
+# ─────────────────────────────────────────
+function seek_world_info(topic::String)
+    println("IIGY: Seeking world info on: $topic")
+    # 1. Use the most basic search URL to avoid bot-triggering parameters
+    # Using DuckDuckGo for better privacy and less bot detection
+    search_url = "https://html.duckduckgo.com/html/?q=$(replace(topic, " " => "+"))"
+
+    headers = [
+        "User-Agent" => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+        "Accept" => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9",
+        "Accept-Encoding" => "gzip, deflate, br",
+        "Accept-Language" => "en-US,en;q=0.9",
+        "Connection" => "keep-alive",
+        "Upgrade-Insecure-Requests" => "1",
+        "Sec-Fetch-Dest" => "document",
+        "Sec-Fetch-Mode" => "navigate",
+        "Sec-Fetch-Site" => "none",
+        "Sec-Fetch-User" => "?1"
+    ]
+
+    try
+        response = HTTP.get(search_url, headers=headers, redirect=true, readtimeout=10)
+        html_doc = Gumbo.parsehtml(String(response.body))
+
+        # Extract relevant links and text from search results
+        # This is a simplified example; a real crawler would be more sophisticated
+        results = []
+        for link_node in eachmatch(Cascadia.sel("a.result__url"), html_doc.root)
+            href = Gumbo.getattr(link_node, "href")
+            title_node = collect(eachmatch(Cascadia.sel("a.result__a"), link_node))
+            title = isempty(title_node) ? "No Title" : Gumbo.text(first(title_node))
+            if href !== nothing && startswith(href, "http")
+                push!(results, (title=title, url=href))
+            end
+        end
+        println("IIGY: Found $(length(results)) search results for '$topic'.")
+        return results
+    catch e
+        println("IIGY: Error seeking world info for '$topic': $e")
         return []
     end
 end
 
-# ── THE "HUMAN-LIKE" SEARCHER ───────────────────────────────────────────────
-function seek_world_info(topic::String)
-    # 1. Use the most basic search URL to avoid bot-triggering parameters
-   search_url = "https://html.duckduckgo.com/html/?q=$(replace(topic, " " => "+"))"
-    
-    headers = [
-        "User-Agent" => "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept" => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    ]
-    
-    try
-        res = HTTP.get(search_url, headers)
-        body = String(res.body)
-        
-        # DEBUG: If you keep getting 0 points, uncomment the next line to see what Google sees:
-         write("debug_search.html", body) 
-
-        html = parsehtml(body)
-        results = String[]
-
-        # 2. Broader Selectors: Google often changes classes. 
-        # We will look for h3 (titles) and 'span' or 'div' that likely contain snippets.
-        # DuckDuckGo HTML uses 'a.result__a' for titles and 'a.result__snippet' for descriptions
-for n in eachmatch(sel"a.result__a, .result__snippet", html.root)
-    txt = strip(nodeText(n))
-    if length(txt) > 30
-        push!(results, txt)
-    end
-end
-        
-        return results
-    catch e
-        return String[]
-    end
+# ─────────────────────────────────────────
+# KNOWLEDGE TRANSFORMATION
+# ─────────────────────────────────────────
+function transform_raw_data_to_facts!(kg::IggyOntology.KnowledgeGraph, raw_data::String, source_url::String)
+    # This function would take raw text/HTML and extract facts to add to the KG
+    # For now, it's a placeholder. A more advanced version would use NLP.
+    println("IIGY: Transforming raw data from $source_url into facts...")
+    # Example: if raw_data contains "Julia is a programming language"
+    # IggyOntology.add_fact!(kg, :Julia, :isA, :ProgrammingLanguage)
+    # IggyOntology.add_fact!(kg, :Julia, :hasSource, Symbol(source_url))
+    println("IIGY: Transformation complete (conceptual).")
 end
 
-# ── RUN SESSION ─────────────────────────────────────────────────────────────
-function start_iggy_session()
-    kb = ingest_domain_knowledge()
-    
-    println("="^60)
-    println(" IIGY v1: KNOWLEDGE INGESTION PHASE ")
-    println(" Location: Nairobi | Target: Tech & Business Context ")
-    println("="^60)
+# ─────────────────────────────────────────
+# MAIN DISCOVERY LOOP (for iggy_discovery_loop.jl)
+# ─────────────────────────────────────────
+function run_sovereign_discovery(kg::IggyOntology.KnowledgeGraph, domains_csv_path::String)
+    println("IIGY: Starting Sovereign Discovery Loop...")
+    knowledge_domains = ingest_domain_knowledge(kg, domains_csv_path)
 
-    for item in kb
-        # Skip empty areas and only focus on what matters to you
-        if !isempty(item.area) && (item.priority == "Critical" || item.priority == "High")
-            print(">>> Learning: $(item.area) ... ")
-            
-            data = seek_world_info("$(item.domain) $(item.area)")
-            
-            if !isempty(data)
-                open("iggy_world_view.txt", "a") do f
-                    write(f, "\n[$(now())] TOPIC: $(item.area)\n")
-                    for point in data[1:min(2, length(data))]
-                        write(f, "DATA: $point\n")
-                    end
-                end
-                println("Success: Found $(length(data)) insights.")
-            else
-                println("Skipped (No clear data).")
-            end
-            
-            # Anti-Ban Sleep: Makes it look like a student browsing
-            sleep(rand(4.0:7.0)) 
+    for domain_info in knowledge_domains
+        topic = domain_info.domain # Use the domain as a topic for initial search
+        search_results = seek_world_info(topic)
+        
+        for result in search_results
+            # In a real scenario, IGGY would then crawl these URLs and extract facts
+            # For now, we just log the discovery and add basic facts to KG
+            println("  Discovered: $(result.title) from $(result.url)")
+            # Add facts about the discovered URL to the KG
+            url_symbol = Symbol(result.url)
+            IggyOntology.add_entity!(kg, url_symbol, IggyOntology.TYPE_LITERAL) # URLs as literals
+            IggyOntology.add_fact!(kg, Symbol(domain_info.domain), IggyOntology.PRED_LEARNED_FROM, url_symbol)
+            IggyOntology.add_fact!(kg, url_symbol, IggyOntology.PRED_HAS_TITLE, Symbol(result.title))
+            # transform_raw_data_to_facts!(kg, "", result.url) # Placeholder for actual content parsing
         end
     end
-    println("\n[FINISH] IIGY has completed her study session.")
+    println("IIGY: Sovereign Discovery Loop Finished.")
 end
-
-start_iggy_session()
