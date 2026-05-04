@@ -17,7 +17,7 @@ const BASE_URL = "https://api.binance.com"
 const MAX_DRAWDOWN = -0.4
 const WARMUP = 40
 const POSITION_SIZE = 5.0
-const HOLD_TIME = 60   # Seconds to hold before checking exit
+const HOLD_TIME = 30  # Seconds to hold before checking exit
 
 # ─────────────────────────────────────────
 # STATE
