@@ -1,216 +1,381 @@
-# ==============================================================================
-# IGGY — CNS v2.9 INTEGRATED PRODUCTION ARCHITECTURE
-# Merged: Logic v2.8 + Live Binance Connectivity
-# ==============================================================================
-
-using HTTP, JSON, SHA, Dates, Statistics, Printf, Random
+using HTTP, JSON, Dates, Statistics, Printf
 
 # ─────────────────────────────────────────
-# 1. GLOBAL CONFIG & RISK PARAMETERS
+# CONFIG
 # ─────────────────────────────────────────
-const BASE_URL              = "https://testnet.binance.vision"
-const FEE                   = 0.0004f0   # 0.04% Exchange Fee
-const SLIPPAGE              = 0.0002f0   # 0.02% Estimated Slippage
-const MAX_DD                = 0.10f0     # 10% Global Capital Kill-Switch
-const MIN_EDGE_REQUIRED     = 0.0018f0   # Minimum expected net profit to enter
-const TRANSITION_LOCK_TICKS = 30         # Wait 30 steps after regime change
-const CONFIDENCE_DECAY      = 0.998f0    # Natural erosion of "Brain" trust
+const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+const BASE_URL = "https://testnet.binance.vision"
+
+const FEE = 0.0004
+const SLIPPAGE = 0.0002
+const EXTRA_COST = 0.0003
+const MAX_DD = 0.10
+const MAX_POSITIONS = 2
+
+# Strategy Parameters
+const MACD_FAST_PERIOD = 12
+const MACD_SLOW_PERIOD = 26
+const MACD_SIGNAL_PERIOD = 9
+const ATR_PERIOD = 14
+const ATR_MULTIPLIER_SL = 2.0 # Multiplier for ATR to set stop loss
+const ATR_MULTIPLIER_TP = 4.0 # Multiplier for ATR to set take profit
+const RISK_PER_TRADE_PERCENT = 0.01 # 1% of capital per trade
 
 # ─────────────────────────────────────────
-# 2. CORE STRUCTURES (v2.8)
+# STRUCTS
 # ─────────────────────────────────────────
 mutable struct Capital
-    balance::Float32
-    peak::Float32
-    dd::Float32
+    balance::Float64
+    peak::Float64
+    dd::Float64
 end
 
 mutable struct Brain
-    confidence::Float32
-    regime_memory::Dict{Symbol, Float32}
+    confidence::Float64
     last_regime::Symbol
     transition_timer::Int
 end
 
 mutable struct Strategy
-    weight::Float32
-    pnl_history::Vector{Float32}
-    avg_expectancy::Float32
+    weight::Float64
+    pnl_history::Vector{Float64}
+    expectancy::Float64
+end
+
+mutable struct Asset
+    symbol::String
+    price::Float64
+    prev::Float64
+    high::Float64 # Added for ATR
+    low::Float64  # Added for ATR
+    close_history::Vector{Float64} # Added for indicators
+    vol::Float64
+    pressure::Float64
+    stability::Float64
+    trend::Float64
+    cooldown::Int
+    vol_cluster::Float64
+    
+    # MACD indicators
+    macd_fast_ema::Float64
+    macd_slow_ema::Float64
+    macd_signal_ema::Float64
+    macd_line::Float64
+    signal_line::Float64
+
+    # ATR
+    atr::Float64
 end
 
 mutable struct Position
-    side::Int8          # 1 for Long, -1 for Short
-    entry::Float32
-    size::Float32
-    tp::Float32
-    sl::Float32
+    symbol::String
+    side::Int
+    entry::Float64
+    size::Float64
+    tp::Float64
+    sl::Float64
+    peak::Float64
     age::Int
 end
 
 # ─────────────────────────────────────────
-# 3. CONNECTIVITY HELPERS
+# HELPER FUNCTIONS FOR INDICATORS
 # ─────────────────────────────────────────
-function hmac_sha256_hex(key, msg)
-    return bytes2hex(hmac_sha256(Vector{UInt8}(key), Vector{UInt8}(msg)))
+function calculate_ema(prices::Vector{Float64}, period::Int, prev_ema::Float64)
+    if isempty(prices) || period <= 0
+        return 0.0
+    end
+    alpha = 2 / (period + 1)
+    if prev_ema == 0.0
+        return sum(prices) / length(prices) # Simple average for initial EMA
+    else
+        return alpha * prices[end] + (1 - alpha) * prev_ema
+    end
 end
 
-function get_live_price(symbol="BTCUSDT")
-    url = "$BASE_URL/api/v3/ticker/price?symbol=$symbol"
+function calculate_atr(asset::Asset, period::Int)
+    if length(asset.close_history) < period
+        return 0.0
+    end
+
+    true_ranges = Float64[]
+    for i in max(1, length(asset.close_history) - period + 1):length(asset.close_history)
+        current_high = asset.high # This needs to be the high of the current candle
+        current_low = asset.low   # This needs to be the low of the current candle
+        prev_close = (i > 1) ? asset.close_history[i-1] : asset.prev # Use previous close from history
+
+        tr1 = current_high - current_low
+        tr2 = abs(current_high - prev_close)
+        tr3 = abs(current_low - prev_close)
+        push!(true_ranges, max(tr1, tr2, tr3))
+    end
+    return sum(true_ranges) / length(true_ranges)
+end
+
+# ─────────────────────────────────────────
+# DATA
+# ─────────────────────────────────────────
+function get_price(sym)
     try
-        res = HTTP.get(url)
-        return parse(Float32, JSON.parse(String(res.body))["price"])
-    catch
-        return nothing
-    end
-end
-
-# ─────────────────────────────────────────
-# 4. REGIME & DECISION LOGIC (v2.8)
-# ─────────────────────────────────────────
-function update_regime_state!(brain::Brain, current_vol::Float32)
-    new_regime = :CHOP
-    if current_vol > 0.0006f0
-        new_regime = :BREAKOUT
-    elseif current_vol > 0.0002f0
-        new_regime = :TREND
-    end
-
-    if new_regime != brain.last_regime
-        brain.last_regime = new_regime
-        brain.transition_timer = TRANSITION_LOCK_TICKS
-    end
-
-    if brain.transition_timer > 0
-        brain.transition_timer -= 1
-    end
-    return new_regime
-end
-
-function calculate_signal_and_quality(brain::Brain, strat::Strategy, regime::Symbol)
-    raw_neural_signal = randn() * 0.8f0 
-    weighted_signal = raw_neural_signal * brain.confidence * strat.weight
-    
-    if regime == :CHOP
-        weighted_signal *= 0.3f0
-    elseif regime == :TREND
-        weighted_signal *= 1.1f0
-    end
-
-    net_edge = abs(weighted_signal) - (FEE + SLIPPAGE)
-    return Float32(weighted_signal), Float32(net_edge)
-end
-
-# ─────────────────────────────────────────
-# 5. EXECUTION ENGINE
-# ─────────────────────────────────────────
-function execute_trade(api_key, api_secret, price, signal, net_edge, capital, brain, regime)
-    if brain.transition_timer > 0 || net_edge < MIN_EDGE_REQUIRED
-        return nothing
-    end
-
-    risk_mod = regime == :TREND ? 0.02f0 : 0.005f0
-    size = capital.balance * risk_mod
-    side_str = signal > 0 ? "BUY" : "SELL"
-    side_int = signal > 0 ? 1 : -1
-    
-    # Validating signal via Binance /order/test endpoint
-    endpoint = "/api/v3/order/test"
-    ts = Int64(floor(datetime2unix(now(Dates.UTC)) * 1000))
-    query = "symbol=BTCUSDT&side=$side_str&type=MARKET&quantity=0.001&timestamp=$ts&recvWindow=5000"
-    sig = hmac_sha256_hex(api_secret, query)
-    
-    try
-        HTTP.post("$BASE_URL$endpoint?$query&signature=$sig", ["X-MBX-APIKEY" => api_key])
-        
-        # Triple Barrier Initialization
-        tp_price = price * (1 + (side_int * 0.005f0))
-        sl_price = price * (1 - (side_int * 0.003f0))
-        
-        return Position(Int8(side_int), price, size, tp_price, sl_price, 0)
+        res = HTTP.get("$BASE_URL/api/v3/ticker/price?symbol=$sym")
+        data = JSON.parse(String(res.body))
+        return parse(Float64, data["price"])
     catch e
+        println("Error fetching price for $sym: $e")
         return nothing
     end
 end
 
 # ─────────────────────────────────────────
-# 6. FEEDBACK ENGINE (v2.8)
+# PERCEPTION
 # ─────────────────────────────────────────
-function evaluate_exit!(pos::Position, price, capital, brain, strat, regime)
-    pnl_raw = (price - pos.entry) / pos.entry * pos.side
-    
-    is_tp = (pos.side == 1 && price >= pos.tp) || (pos.side == -1 && price <= pos.tp)
-    is_sl = (pos.side == 1 && price <= pos.sl) || (pos.side == -1 && price >= pos.sl)
-    is_expired = pos.age > 200
+function update_asset!(a, price, high=price, low=price) # Added high and low for ATR
+    if price === nothing; return; end
 
-    if is_tp || is_sl || is_expired
-        net_pnl_pct = pnl_raw - FEE - SLIPPAGE
-        actual_profit = net_pnl_pct * pos.size
-        
-        capital.balance += actual_profit
-        capital.peak = max(capital.peak, capital.balance)
-        capital.dd = (capital.peak - capital.balance) / capital.peak
-        
-        brain.confidence = clamp(brain.confidence * CONFIDENCE_DECAY + (net_pnl_pct > 0 ? 0.02f0 : -0.05f0), 0.1f0, 1.0f0)
-        push!(strat.pnl_history, net_pnl_pct)
-        strat.avg_expectancy = mean(strat.pnl_history[max(1, end-20):end])
-        strat.weight = clamp(1.0f0 + (strat.avg_expectancy * 10f0), 0.5f0, 2.0f0)
+    a.prev = a.price == 0 ? price : a.price
+    a.price = price
+    a.high = high # Update high
+    a.low = low   # Update low
 
-        return actual_profit
+    push!(a.close_history, price)
+    if length(a.close_history) > max(MACD_SLOW_PERIOD, ATR_PERIOD)
+        popfirst!(a.close_history)
     end
-    return 0.0f0
+
+    a.vol = abs(price - a.prev) / a.prev
+
+    a.pressure = 0.9a.pressure + 0.1 * sign(price - a.prev) * a.vol
+    a.pressure *= 0.995
+
+    a.stability = exp(-a.vol * 3000)
+    a.trend = 0.9a.trend + 0.1 * sign(price - a.prev)
+
+    # volatility clustering
+    a.vol_cluster = 0.95a.vol_cluster + 0.05 * a.vol
+
+    # Update MACD
+    if length(a.close_history) >= MACD_SLOW_PERIOD
+        a.macd_fast_ema = calculate_ema(a.close_history, MACD_FAST_PERIOD, a.macd_fast_ema)
+        a.macd_slow_ema = calculate_ema(a.close_history, MACD_SLOW_PERIOD, a.macd_slow_ema)
+        a.macd_line = a.macd_fast_ema - a.macd_slow_ema
+        a.macd_signal_ema = calculate_ema([a.macd_line], MACD_SIGNAL_PERIOD, a.macd_signal_ema)
+        a.signal_line = a.macd_signal_ema
+    end
+
+    # Update ATR
+    a.atr = calculate_atr(a, ATR_PERIOD)
 end
 
 # ─────────────────────────────────────────
-# 7. MAIN CONTROL LOOP
+# ML REGIME (LIGHTWEIGHT)
 # ─────────────────────────────────────────
-function run_iggy_system()
-    api_key = get(ENV, "BINANCE_API_KEY", "")
-    api_secret = get(ENV, "BINANCE_API_SECRET", "")
-    
-    if api_key == "" || api_secret == ""
-        println("❌ ERROR: Environment Keys missing.")
-        return
+function classify_regime(a)
+    score = a.vol * 10000 + abs(a.pressure) * 5000 + abs(a.trend)
+
+    if score < 1
+        return :DEAD
+    elseif score < 3
+        return :CHOP
+    else
+        return :TREND
+    end
+end
+
+# ─────────────────────────────────────────
+# SIGNAL
+# ─────────────────────────────────────────
+function generate_signal(a, brain, strat, regime)
+    if brain.transition_timer > 0 || regime != :TREND || a.cooldown > 0
+        return 0, 0.0
     end
 
-    capital = Capital(1000.0f0, 1000.0f0, 0.0f0)
-    brain   = Brain(0.8f0, Dict{Symbol, Float32}(), :TREND, 0)
-    strat   = Strategy(1.0f0, Float32[], 0.0f0)
-    pos     = nothing
-    tick    = 0
+    momentum = sign(a.price - a.prev)
+    pressure = sign(a.pressure)
 
-    println("--------------------------------------------------")
-    println("📡 IGGY CNS v2.9: LIVE MARKET FEED + TESTNET API")
-    println("--------------------------------------------------")
+    # MACD signal: Crossover of MACD line and Signal line
+    macd_signal = 0
+    if a.macd_line > a.signal_line && a.macd_line - a.vol_cluster > a.signal_line # MACD crosses above signal line with some buffer
+        macd_signal = 1
+    elseif a.macd_line < a.signal_line && a.macd_line + a.vol_cluster < a.signal_line # MACD crosses below signal line with some buffer
+        macd_signal = -1
+    end
+
+    # Confluence: momentum, pressure, trend, and MACD must align
+    if momentum != pressure || sign(a.trend) != pressure || macd_signal != momentum
+        return 0, 0.0
+    end
+
+    if a.stability < 0.3 || abs(a.pressure) < 0.0004 || a.atr == 0.0
+        return 0, 0.0
+    end
+
+    score = pressure * a.stability * brain.confidence * strat.weight
+    edge = abs(score) - (FEE + SLIPPAGE + EXTRA_COST)
+
+    return edge > 0 ? (Int(pressure), edge) : (0, edge)
+end
+
+# ─────────────────────────────────────────
+# RISK
+# ─────────────────────────────────────────
+function position_size(capital, a)
+    # Dynamic risk based on ATR and a fixed percentage of capital
+    if a.atr == 0.0
+        return 0.0
+    end
+    
+    risk_amount = capital.balance * RISK_PER_TRADE_PERCENT
+    stop_loss_in_price = a.atr * ATR_MULTIPLIER_SL
+    
+    # Calculate size based on how much capital to risk per trade and the stop loss distance
+    size = risk_amount / stop_loss_in_price
+    
+    # Clamp size to reasonable values (adjust as needed)
+    return clamp(size, 0.0001, 0.05) # Increased max size for potential higher volatility
+end
+
+function open_position(a, signal, capital)
+    size = position_size(capital, a)
+    if size == 0.0; return nothing; end
+
+    # Dynamic TP/SL from ATR
+    tp_dist = a.atr * ATR_MULTIPLIER_TP
+    sl_dist = a.atr * ATR_MULTIPLIER_SL
+
+    tp = a.price * (1 + signal * tp_dist)
+    sl = a.price * (1 - signal * sl_dist)
+
+    return Position(a.symbol, signal, a.price, size, tp, sl, 0.0, 0)
+end
+
+# ─────────────────────────────────────────
+# EXIT + LEARNING
+# ─────────────────────────────────────────
+function close_trade!(pos, pnl, capital, brain, strat, reason, assets)
+    net = (pnl - FEE - SLIPPAGE) * pos.size
+
+    capital.balance += net
+    capital.peak = max(capital.peak, capital.balance)
+    capital.dd = (capital.peak - capital.balance) / capital.peak
+
+    # cooldown after loss (dynamic based on ATR or vol_cluster)
+    if net < 0
+        assets[pos.symbol].cooldown = round(Int, 15 * (1 + assets[pos.symbol].vol_cluster / 0.005)) # Longer cooldown for higher volatility
+    end
+
+    # brain learning
+    brain.confidence = clamp(brain.confidence + (net > 0 ? 0.01 : -0.03), 0.1, 1.0)
+
+    push!(strat.pnl_history, net)
+    strat.expectancy = mean(strat.pnl_history[max(1,end-30):end])
+    strat.weight = clamp(1 + strat.expectancy * 5, 0.5, 2.0)
+
+    # journaling (structured)
+    open("iggy_journal.csv","a") do io
+        write(io, "$(now()),$(pos.symbol),$(pos.side),$(pos.entry),$(net),$(reason),$(capital.balance)\n")
+    end
+
+    println("\n📤 $(pos.symbol) | $reason | PnL: $(round(net, digits=5)) | EQ: $(round(capital.balance, digits=2))")
+
+    return true
+end
+
+function update_position!(pos, a, capital, brain, strat, assets)
+    pos.age += 1
+    pnl = (a.price - pos.entry) / pos.entry * pos.side
+    pos.peak = max(pos.peak, pnl)
+
+    # ATR-based Stop Loss
+    if a.atr > 0.0 && pnl < - (a.atr * ATR_MULTIPLIER_SL / pos.entry)
+        return close_trade!(pos, pnl, capital, brain, strat, :SL_ATR, assets)
+    end
+
+    # Trailing Stop (original logic, still useful)
+    if pos.peak > 0.003 && pnl < pos.peak * 0.65
+        return close_trade!(pos, pnl, capital, brain, strat, :TRAIL, assets)
+    end
+
+    # Take Profit
+    if (pos.side == 1 && a.price >= pos.tp) || (pos.side == -1 && a.price <= pos.tp)
+        return close_trade!(pos, pnl, capital, brain, strat, :TP, assets)
+    end
+
+    return false
+end
+
+# ─────────────────────────────────────────
+# MAIN LOOP
+# ─────────────────────────────────────────
+function run_iggy()
+    capital = Capital(1000.0,1000.0,0.0)
+    strat = Strategy(1.0,Float64[],0.0)
+
+    assets = Dict{String,Asset}()
+    brains = Dict{String,Brain}()
+
+    for s in SYMBOLS
+        # Initialize Asset with new fields
+        assets[s] = Asset(s,0.0,0.0,0.0,0.0,Float64[],0.0,0.0,0.0,0.0,0,0.0,0.0,0.0,0.0,0.0,0.0,0.0)
+        brains[s] = Brain(0.8,:TREND,0)
+    end
+
+    positions = Dict{String,Position}()
+
+    println("🚀 IGGY CNS v4 ACTIVE - IMPROVED")
 
     while capital.dd < MAX_DD
-        tick += 1
-        live_price = get_live_price()
-        
-        if live_price === nothing
-            sleep(2); continue
-        end
-
-        # Market Volatility Simulation for Regime Awareness
-        vol = abs(Float32(randn())) * 0.0004f0
-        regime = update_regime_state!(brain, vol)
-        
-        if pos !== nothing
-            pos.age += 1
-            if evaluate_exit!(pos, live_price, capital, brain, strat, regime) != 0.0f0
-                pos = nothing
+        for (sym,a) in assets
+            # In a real scenario, this would be a WebSocket stream providing OHLCV data
+            # For this simulation, we'll fetch price and assume high/low are current price for simplicity
+            # A more robust solution would fetch actual OHLCV data for ATR calculation
+            price = get_price(sym)
+            if price !== nothing
+                # For simplicity in this single-file context, we'll use current price for high/low
+                # In a real bot, you'd get actual candle data (OHLCV) for accurate ATR.
+                update_asset!(a, price, price, price)
+            else
+                println("Warning: Could not get price for $sym. Skipping update.")
             end
-        elseif pos === nothing
-            sig, edge = calculate_signal_and_quality(brain, strat, regime)
-            pos = execute_trade(api_key, api_secret, live_price, sig, edge, capital, brain, regime)
         end
 
-        if tick % 5 == 0
-            @printf("💰 \$%.2f | DD: %.2f%% | BTC: \$%.2f | REGIME: %s\r", 
-                    capital.balance, capital.dd * 100, live_price, string(regime))
+        # update positions
+        for (sym,pos) in copy(positions)
+            if update_position!(pos, assets[sym], capital, brains[sym], strat, assets)
+                delete!(positions, sym)
+            end
         end
-        sleep(1.0)
+
+        # entries
+        if length(positions) < MAX_POSITIONS
+            for (sym,a) in assets
+                if haskey(positions, sym) || a.cooldown > 0
+                    continue
+                end
+
+                regime = classify_regime(a)
+                brain = brains[sym]
+
+                signal, edge = generate_signal(a, brain, strat, regime)
+                if signal != 0
+                    new_pos = open_position(a, signal, capital)
+                    if new_pos !== nothing
+                        positions[sym] = new_pos
+                        println("📥 OPEN | $sym | $(signal==1 ? "LONG" : "SHORT") | Edge=$(round(edge, digits=5)) | Size=$(round(new_pos.size, digits=5))")
+                    else
+                        println("🚫 Could not open position for $sym. Size calculation failed.")
+                    end
+                end
+            end
+        end
+
+        @printf("💰 %.2f | DD: %.2f%% | Active: %d\r",
+            capital.balance, capital.dd*100, length(positions))
+
+        sleep(1) # Simulate real-time updates, but a real bot would be event-driven via WebSockets
     end
-    println("\n🛑 SYSTEM HALTED: Drawdown limit reached.")
+
+    println("\n🛑 STOPPED (MAX DD)")
 end
 
-run_iggy_system()
+run_iggy()
+
