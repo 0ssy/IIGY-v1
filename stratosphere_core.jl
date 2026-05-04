@@ -1,13 +1,8 @@
 # ==============================================================================
-# IGGY v17.4 — STABLE QUANT ENGINE (REPAIRED)
+# IGGY v19 — ADAPTIVE REGIME ENGINE
 # ==============================================================================
 
-
-
-
-# New line
-using HTTP, JSON, Dates, Random, Statistics, Printf, Dates, Logging
-using CSV, DataFrames
+using HTTP, JSON, Dates, Statistics, Printf, Logging, CSV, DataFrames
 
 # ─────────────────────────────────────────
 # CONFIG
@@ -15,9 +10,9 @@ using CSV, DataFrames
 
 const BASE_URL = "https://api.binance.com"
 const MAX_DRAWDOWN = -0.4
-const WARMUP = 40
+const WARMUP = 60
 const POSITION_SIZE = 5.0
-const HOLD_TIME = 60  # Seconds to hold before checking exit
+const TRADE_COOLDOWN = 30  # seconds
 
 # ─────────────────────────────────────────
 # STATE
@@ -29,253 +24,243 @@ mutable struct IGGY
     w_trend::Float64
     w_range::Float64
     w_vol::Float64
-    returns::Vector{Float64}
+    returns_trend::Vector{Float64}
+    returns_range::Vector{Float64}
+    last_trade_time::Int64
 end
 
 # ─────────────────────────────────────────
-# PRICE FEED (Added Error Handling)
+# API
 # ─────────────────────────────────────────
 
 function get_price(symbol)
-    max_retries = 3
-    for i in 1:max_retries
-        try
-            url = "$BASE_URL/api/v3/ticker/price?symbol=$symbol"
-            res = HTTP.get(url, readtimeout=5, connect_timeout=5)
-            data = JSON.parse(String(res.body))
-            return parse(Float64, data["price"])
-        catch e
-            if i == max_retries
-                @warn "Final attempt failed for $symbol: $e"
-                return 0.0
-            end
-            sleep(1 * i) # Wait longer with each failure
-        end
+    try
+        url = "$BASE_URL/api/v3/ticker/price?symbol=$symbol"
+        res = HTTP.get(url)
+        data = JSON.parse(String(res.body))
+        return parse(Float64, data["price"])
+    catch
+        return 0.0
     end
-    return 0.0
 end
 
 # ─────────────────────────────────────────
-# QUANT FEATURES
+# FEATURES
 # ─────────────────────────────────────────
 
-function moving_avg(p, n)
-    length(p) < n ? mean(p) : mean(p[end-n+1:end])
+moving_avg(p, n) = length(p) < n ? mean(p) : mean(p[end-n+1:end])
+volatility(p, n) = length(p) < n ? 0.0 : std(diff(p[end-n+1:end]))
+momentum(p, n) = length(p) <= n ? 0.0 : p[end] - p[end-n]
+
+function atr(p, n=14)
+    length(p) < n+1 && return 0.0
+    return mean(abs.(diff(p[end-n:end])))
 end
 
-function volatility(p, n)
-    length(p) < n ? 0.0 : std(diff(p[end-n+1:end]))
+# ─────────────────────────────────────────
+# REGIME + MTF
+# ─────────────────────────────────────────
+
+function get_regime(p)
+    fast = moving_avg(p, 20)
+    slow = moving_avg(p, 50)
+    strength = abs(fast - slow) / slow
+
+    return strength > 0.0015 ? :TREND : :RANGE
 end
 
-function momentum(p, n)
-    length(p) <= n ? 0.0 : p[end] - p[end-n]
+function mtf_trend(p)
+    short = moving_avg(p, 20)
+    long = moving_avg(p, 100)
+    return short > long ? 1 : -1
 end
 
 # ─────────────────────────────────────────
 # STRATEGIES
 # ─────────────────────────────────────────
 
-function trend_strategy(p)
-    fast = moving_avg(p, 5)
-    slow = moving_avg(p, 20)
-    return fast > slow ? 1 : -1
-end
-
-function range_strategy(p)
-    μ = moving_avg(p, 20)
-    return p[end] > μ ? -1 : 1 # Mean reversion
-end
+trend_strategy(p) = moving_avg(p,5) > moving_avg(p,20) ? 1 : -1
+range_strategy(p) = p[end] > moving_avg(p,20) ? -1 : 1
 
 function vol_strategy(p)
     vol = volatility(p, 20)
     mom = momentum(p, 5)
-    if vol < 0.0005
-        return 0
-    elseif mom > 0
-        return 1
-    else
-        return -1
-    end
+    vol < 0.0005 && return 0
+    return mom > 0 ? 1 : -1
 end
 
 # ─────────────────────────────────────────
-# DECISION ENGINE
+# DECISION ENGINE (FIXED)
 # ─────────────────────────────────────────
 
 function decide(core, p)
+    regime = get_regime(p)
+    mtf = mtf_trend(p)
+
     t = trend_strategy(p)
     r = range_strategy(p)
     v = vol_strategy(p)
 
-    score = (core.w_trend * t) + (core.w_range * r) + (core.w_vol * v)
-
-    # Ignore weak/noise signals
-    return abs(score) < 0.40 ? 0 : Int(sign(score))
-end
-
-# Inside stratosphere_core.jl
-function execute(entry, exit, signal)
-    ret = (exit - entry) / entry
-    # Subtract 0.1% for entry and 0.1% for exit (standard Binance fees)
-    actual_pnl = (ret * signal * POSITION_SIZE) - 0.002 
-    return actual_pnl
-end
-# ─────────────────────────────────────────
-# SAFE LEARNING (No NaN/Div0)
-# ─────────────────────────────────────────
-
-
-
-function update_weights!(core, pnl)
-    # 1. Protection against bad data
-    if isnan(pnl) || isinf(pnl); return end
-
-    # 2. Append new PNL to current session memory
-    push!(core.returns, pnl)
-    
-    # 3. "Log-Learning": If session memory is low, try to fill from CSV
-    if length(core.returns) < 10 && isfile("iggy_trade_log.csv")
-        try
-            df = CSV.read("iggy_trade_log.csv", DataFrame)
-            if !isempty(df) && "pnl" in names(df)
-                # Take the last 50 historical PNLs from the log
-                historical_pnls = df.pnl[max(1, end-49):end]
-                # Merge historical data with current session data
-                core.returns = vcat(historical_pnls, core.returns)
-            end
-        catch e
-            @warn "Could not read logs for learning: $e"
-        end
-    end
-
-    # Keep memory manageable (rolling window of 100)
-    if length(core.returns) > 100
-        core.returns = core.returns[end-99:end]
-    end
-
-    # 4. Math Check (Minimum samples for Sharpe)
-    length(core.returns) < 10 && return
-
-    μ = mean(core.returns)
-    σ = std(core.returns)
-
-    # Avoid division by zero
-    if σ < 1e-8; return end
-
-    # Sharpe-based adjustment
-    sharpe = clamp(μ / σ, -2.0, 2.0)
-    lr = 0.03 # Learning Rate
-
-    # Update weights
-    core.w_trend += lr * sharpe
-    core.w_range += lr * sharpe
-    core.w_vol   += lr * sharpe
-
-    # 5. Normalization (Crucial for stability)
-    s = abs(core.w_trend) + abs(core.w_range) + abs(core.w_vol)
-
-    if s < 1e-8
-        core.w_trend, core.w_range, core.w_vol = 0.33, 0.33, 0.34
+    if regime == :TREND
+        score = (core.w_trend * t) + (core.w_vol * v)
+        tag = :TREND
     else
-        core.w_trend /= s
-        core.w_range /= s
-        core.w_vol   /= s
+        score = (core.w_range * r)
+        tag = :RANGE
     end
+
+    # MTF filter
+    if score > 0 && mtf < 0
+        return 0, tag
+    elseif score < 0 && mtf > 0
+        return 0, tag
+    end
+
+    return abs(score) < 0.4 ? 0 : Int(sign(score)), tag
 end
+
+# ─────────────────────────────────────────
+# EXECUTION (ATR-BASED)
+# ─────────────────────────────────────────
+
+function execute_trade(signal, entry, prices)
+    a = atr(prices)
+
+    stop = signal == 1 ? entry - (a * 1.5) : entry + (a * 1.5)
+    take = signal == 1 ? entry + (a * 2.5) : entry - (a * 2.5)
+
+    exit = entry
+
+    for i in 1:60
+        sleep(1)
+        px = get_price("BTCUSDT")
+        px <= 0 && continue
+
+        # breakeven
+        if signal == 1 && px - entry > a * 0.8
+            stop = entry
+        elseif signal == -1 && entry - px > a * 0.8
+            stop = entry
+        end
+
+        if signal == 1 && (px <= stop || px >= take)
+            exit = px
+            break
+        elseif signal == -1 && (px >= stop || px <= take)
+            exit = px
+            break
+        end
+
+        exit = px
+    end
+
+    ret = (exit - entry) / entry
+    pnl = (ret * signal * POSITION_SIZE) - 0.002
+    return pnl
+end
+
+# ─────────────────────────────────────────
+# TRUE LEARNING (PER-STRATEGY)
+# ─────────────────────────────────────────
+
+function update_weights!(core, pnl, tag)
+    if tag == :TREND
+        push!(core.returns_trend, pnl)
+    else
+        push!(core.returns_range, pnl)
+    end
+
+    function sharpe(x)
+        length(x) < 10 && return 0.0
+        σ = std(x)
+        σ < 1e-8 && return 0.0
+        return clamp(mean(x)/σ, -2, 2)
+    end
+
+    s_trend = sharpe(core.returns_trend)
+    s_range = sharpe(core.returns_range)
+
+    lr = 0.05
+
+    core.w_trend += lr * s_trend
+    core.w_range += lr * s_range
+    core.w_vol   += lr * s_trend
+
+    # normalize
+    s = abs(core.w_trend) + abs(core.w_range) + abs(core.w_vol)
+    core.w_trend /= s
+    core.w_range /= s
+    core.w_vol   /= s
+end
+
 # ─────────────────────────────────────────
 # LOGGING
 # ─────────────────────────────────────────
 
-
-function log_trade(signal, entry, exit, pnl, eq, weights)
-    file_path = "iggy_trade_log.csv"
-    
-    # Create header if file doesn't exist
-    if !isfile(file_path)
-        open(file_path, "w") do f
-            write(f, "timestamp,signal,entry,exit,pnl,equity,w1,w2,w3\n")
+function log_trade(signal, entry, pnl, eq, tag)
+    file = "iggy_v19_log.csv"
+    if !isfile(file)
+        open(file,"w") do f
+            write(f,"time,signal,entry,pnl,equity,tag\n")
         end
     end
-
-    # Append the trade data
-    open(file_path, "a") do f
-        timestamp = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
-        weights_str = join(round.(weights, digits=4), ",")
-        write(f, "$timestamp,$signal,$entry,$exit,$pnl,$eq,$weights_str\n")
+    open(file,"a") do f
+        write(f,"$(now()),$signal,$entry,$pnl,$eq,$tag\n")
     end
 end
 
-
 # ─────────────────────────────────────────
-# RUNTIME
+# MAIN LOOP
 # ─────────────────────────────────────────
 
 function run_iggy()
-    # Initialize IGGY with start equity and initial weights
-    core = IGGY(1.0, 1.0, 0.33, 0.33, 0.34, Float64[])
-    symbol = "BTCUSDT"
+    core = IGGY(1.0,1.0,0.33,0.33,0.34,Float64[],Float64[],0)
     prices = Float64[]
+    symbol = "BTCUSDT"
 
-    println(">>> IGGY v17.4 STABLE QUANT ENGINE ONLINE")
+    println("🚀 IGGY v19 ONLINE")
 
     while true
-        # 1. Risk Check: Monitoring Drawdown
-        core.peak_equity = max(core.peak_equity, core.equity)
-        dd = (core.equity - core.peak_equity) / core.peak_equity
-        if dd < MAX_DRAWDOWN
-            println("🛑 STOPPED — DRAWDOWN LIMIT ($MAX_DRAWDOWN) REACHED")
-            break
-        end
-
-        # 2. Data Fetch: Get current price
         price = get_price(symbol)
-        if price <= 0.0
-            println("⚠️ Network glitch, retrying...")
-            sleep(2)
-            continue 
-        end
-        
-        push!(prices, price)
-        length(prices) > 120 && popfirst!(prices)
+        price <= 0 && continue
 
-        # 3. Warmup Phase
+        push!(prices, price)
+        length(prices) > 200 && popfirst!(prices)
+
         if length(prices) < WARMUP
             println("⏳ WARMUP $(length(prices))/$WARMUP")
             sleep(1)
             continue
         end
 
-        println("💓 Heartbeat: $(Dates.now()) | Price: $price")
-        flush(stdout)
+        # drawdown
+        core.peak_equity = max(core.peak_equity, core.equity)
+        dd = (core.equity - core.peak_equity) / core.peak_equity
+        dd < MAX_DRAWDOWN && break
 
-        # 4. Decision Engine
-        signal = decide(core, prices)
-        if signal == 0
+        # cooldown
+        if time() - core.last_trade_time < TRADE_COOLDOWN
             sleep(1)
             continue
         end
 
-        # 5. Trade Execution
+        signal, tag = decide(core, prices)
+        signal == 0 && continue
+
         entry = price
-        println("🚀 SIGNAL: $signal | ENTRY: $entry")
-        sleep(HOLD_TIME)
+        println("🚀 $tag TRADE | SIGNAL: $signal @ $entry")
 
-        # 6. Exit & Results
-        exit = get_price(symbol)
-        if exit <= 0.0; exit = entry end # Safety fallback
-        
-        pnl = execute(entry, exit, signal)
-        
-        # 7. State Update & Learning
+        pnl = execute_trade(signal, entry, prices)
+
         core.equity += pnl
-        update_weights!(core, pnl) # Ensure the 'tail' fix is in this function!
+        core.last_trade_time = time()
 
-        # 8. Logging & Telemetry
-        weights_array = [core.w_trend, core.w_range, core.w_vol]
-        log_trade(signal, entry, exit, pnl, core.equity, weights_array)
+        update_weights!(core, pnl, tag)
+        log_trade(signal, entry, pnl, core.equity, tag)
 
-        @printf("📊 EQ: %.4f | PNL: %.4f | W: %.2f, %.2f, %.2f\n", 
-                core.equity, pnl, core.w_trend, core.w_range, core.w_vol)
+        @printf("📊 EQ: %.4f | PNL: %.4f | W: %.2f %.2f %.2f\n",
+            core.equity, pnl, core.w_trend, core.w_range, core.w_vol)
     end
 end
+
 run_iggy()
