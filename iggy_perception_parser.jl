@@ -1,74 +1,96 @@
 module IggyPerception
 
-using ..IggyOntology # Assuming IggyOntology is in the parent module
+# ── NOTE ──────────────────────────────────────────────────────────────────────
+# using ..IggyOntology does NOT work here — IggyOntology is in Main, not a
+# parent module.  Use import Main.IggyOntology instead.
+# ─────────────────────────────────────────────────────────────────────────────
+import Main.IggyOntology
 
-# A simple keyword-based intent recognition for now
+# ─────────────────────────────────────────
+# INTENT RECOGNITION
+# ─────────────────────────────────────────
+
+"""
+    parse_user_input(input_text, kg) -> (intent::Symbol, entities::Dict)
+
+Keyword-based intent classifier.  Returns a Symbol intent and any extracted
+entities.  Falls back to :unknown so iggy_bridge can route to the LLM brain.
+"""
 function parse_user_input(input_text::String, kg::IggyOntology.KnowledgeGraph)
-    lower_input = lowercase(input_text)
-    intent = :unknown
+    t = lowercase(strip(input_text))
+    intent   = :unknown
     entities = Dict{Symbol, Any}()
 
-    # General greetings
-    if occursin("hello", lower_input) || occursin("hi iggy", lower_input) || occursin("hey iggy", lower_input)
+    # ── Greetings ─────────────────────────────────────────────────
+    if occursin(r"^(hi|hey|hello|sup|yo|greetings|good morning|good evening|morning|evening)(\s|$|,|!)", t) ||
+       occursin("hi iggy", t) || occursin("hey iggy", t) || occursin("hello iggy", t)
         intent = :general_greeting
-    elseif occursin("how are you", lower_input)
+
+    # ── Wellbeing ──────────────────────────────────────────────────
+    elseif occursin("how are you", t) || occursin("you doing", t) || occursin("you ok", t)
         intent = :query_wellbeing
-    elseif occursin("who are you", lower_input)
+
+    # ── Identity ───────────────────────────────────────────────────
+    elseif occursin("who are you", t) || occursin("what are you", t) || occursin("your name", t)
         intent = :query_identity
-    elseif occursin("what can you do", lower_input)
+
+    # ── Capabilities ───────────────────────────────────────────────
+    elseif occursin("what can you do", t) || occursin("your capabilities", t) || occursin("help me", t)
         intent = :query_capabilities
     end
 
-    # Trading bot related queries
-    if occursin("trading status", lower_input) || occursin("how are we doing", lower_input) || occursin("current balance", lower_input)
+    # ── CNS / trading status (checked separately so it can override) ─
+    if occursin("status", t) || occursin("trading status", t) ||
+       occursin("how are we doing", t) || occursin("current balance", t) ||
+       occursin("balance", t) || occursin("capital", t) ||
+       occursin("pnl", t) || occursin("profit", t) || occursin("drawdown", t)
         intent = :query_cns_status
-    elseif occursin("trade history", lower_input) || occursin("past trades", lower_input)
+
+    elseif occursin("trade history", t) || occursin("past trades", t) || occursin("history", t)
         intent = :query_cns_trade_history
-    elseif occursin("open positions", lower_input) || occursin("active trades", lower_input)
+
+    elseif occursin("open positions", t) || occursin("active trades", t) ||
+           occursin("positions", t)
         intent = :query_cns_open_positions
     end
 
-    # Learning/Knowledge related queries
-    if occursin("tell me about", lower_input)
+    # ── Knowledge queries ──────────────────────────────────────────
+    m = match(r"tell me about (.+)", t)
+    if m !== nothing
         intent = :query_knowledge
-        # Simple entity extraction for now: assumes the topic is after "tell me about"
-        match_obj = match(r"tell me about (.+)", lower_input)
-        if match_obj !== nothing
-            entities[:topic] = strip(match_obj.captures[1])
-        end
-    elseif occursin("what is", lower_input)
-        intent = :query_knowledge
-        match_obj = match(r"what is (.+)", lower_input)
-        if match_obj !== nothing
-            entities[:topic] = strip(match_obj.captures[1])
-        end
-    elseif occursin("learn about", lower_input)
-        intent = :learn_fact
-        match_obj = match(r"learn about (.+)", lower_input)
-        if match_obj !== nothing
-            entities[:topic] = strip(match_obj.captures[1])
-        end
+        entities[:topic] = strip(m.captures[1])
     end
 
-    # Extract user name if present (simple example)
-    match_name = match(r"my name is (\w+)", lower_input)
-    if match_name !== nothing
-        entities[:user_name] = match_name.captures[1]
+    m = match(r"what is (.+)", t)
+    if m !== nothing && intent == :unknown
+        intent = :query_knowledge
+        entities[:topic] = strip(m.captures[1])
+    end
+
+    m = match(r"learn about (.+)", t)
+    if m !== nothing
+        intent = :learn_fact
+        entities[:topic] = strip(m.captures[1])
+    end
+
+    # ── Entity: user name ──────────────────────────────────────────
+    m = match(r"my name is (\w+)", t)
+    if m !== nothing
+        entities[:user_name] = m.captures[1]
     end
 
     return intent, entities
 end
 
-# Placeholder for more advanced parsing that directly adds facts to KG
+# ─────────────────────────────────────────
+# FACT ENCODER  (placeholder)
+# ─────────────────────────────────────────
 function parse_input_to_fact!(kg::IggyOntology.KnowledgeGraph, input_data::Dict)
-    # This logic would map raw dict keys to Ontology symbols
-    subject = get(input_data, :subject, :Unknown)
+    subject   = get(input_data, :subject,   :Unknown)
     predicate = get(input_data, :predicate, IggyOntology.PRED_CONNECTED_TO)
-    object = get(input_data, :object, :Unknown)
-
-    # Validation and addition to KG
+    object    = get(input_data, :object,    :Unknown)
     println("Perception: Encoded ($subject, $predicate, $object)")
-    # IggyOntology.add_fact!(kg, subject, predicate, object) # Uncomment when add_fact! is defined in ontology
+    IggyOntology.add_fact!(kg, subject, predicate, object)
 end
 
-end # module IggyPerception
+end  # module IggyPerception
