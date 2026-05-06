@@ -3,7 +3,7 @@
     ".\\IGGY_README.md": 1.7780673781101108e9,
     ".\\domains_clean.csv": 1.7779102375600612e9,
     ".\\iggy_assistant.py": 1.7780641777047505e9,
-    ".\\iggy_brain.jl": 1.7780749463754463e9,
+    ".\\iggy_brain.jl": 1.778079626036825e9,
     ".\\iggy_brain_py.py": 1.7780688266533196e9,
     ".\\iggy_bridge.jl": 1.7780632050043612e9,
     ".\\iggy_chat_server.jl": 1.7780519e9,
@@ -13,7 +13,7 @@
     ".\\iggy_crawl_log.txt": 1.77805801332281e9,
     ".\\iggy_crawled_urls.json": 1.778058013313922e9,
     ".\\iggy_crawler.py": 1.7780741966191597e9,
-    ".\\iggy_discovery_loop.jl": 1.7780730214205966e9,
+    ".\\iggy_discovery_loop.jl": 1.7780765563638206e9,
     ".\\iggy_executive_v3.jl": 1.7780741966351364e9,
     ".\\iggy_final_ledger.csv": 1.7778022749128327e9,
     ".\\iggy_global_knowledge.csv": 1.7778068452933197e9,
@@ -35,7 +35,8 @@
     ".\\iggy_transformer.jl": 1.7780636072500172e9,
     ".\\iggy_vault.jl": 1.7777210531019306e9,
     ".\\iggy_vault_data.json": 1.777785219474253e9,
-    ".\\iggy_vision.jl": 1.77807419663082e9,
+    ".\\iggy_vision.jl": 1.7780759898279333e9,
+    ".\\iggy_vision_memory.json": 1.7780799115633242e9,
     ".\\iggy_world_view.txt": 1.7778891383037586e9,
     ".\\live_trade.jl": 1.7778977037958412e9,
     ".\\market_data.json": 1.7776297303126118e9,
@@ -46,5 +47,5 @@
     ".\\stratosphere_core.jl": 1.7778787529205024e9,
     ".\\test_live.jl": 1.7778898238451424e9
   },
-  "saved_at": "2026-05-06T16:44:56.679"
+  "saved_at": "2026-05-06T18:06:54.127"
 }

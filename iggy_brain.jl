@@ -27,7 +27,7 @@
 # ==============================================================================
 
 # ── Force PyCall to use iggy311 conda env (must be set before any @eval using PyCall)
-const _IGGY311 = raw"C:\Users\josep\.julia\conda\3\x86_64\envs\iggy311\python.exe"
+const _IGGY311 = raw"C:\Users\josep\iggy_py311\Scripts\python.exe"
 isfile(_IGGY311) && (ENV["PYTHON"] = _IGGY311)
 
 using Dates, JSON, Printf, HTTP
@@ -38,7 +38,7 @@ function _safe_load_pycall()
     try
         @eval begin
             # Point PyCall at the project .venv to avoid FieldError on missing Python path
-    venv_py = raw"C:\Users\josep\.julia\conda\3\x86_64\envs\iggy311\python.exe"
+    venv_py = raw"C:\Users\josep\iggy_py311\Scripts\python.exe"
     isfile(venv_py) && (ENV["PYTHON"] = venv_py)
     @eval using PyCall
         end
@@ -720,3 +720,4 @@ let tier = !isempty(get_or_key()) ? "1-OpenRouter" :
     println("🧠 IGGY Brain v3.0 | Tier: $tier | Insights: $(length(IGGY_INSIGHTS))")
     println("   TinyLlama + LoRA + ChromaDB → loaded on first use via PyCall")
 end
+
