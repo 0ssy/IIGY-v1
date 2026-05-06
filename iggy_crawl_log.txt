@@ -44,3 +44,60 @@
 [2026-05-06 11:45:53][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
 [2026-05-06 11:45:53][Crawler]   ✓ https://zhidao.baidu.com/question/1894154084944516860.html → 0 chunks stored (topic: Personal Assistant)
 [2026-05-06 11:45:58][Crawler] Crawler stopped by user.
+[2026-05-06 11:49:34][Crawler] 🕷  IGGY crawler daemon — self-directed
+[2026-05-06 11:49:39][Crawler] DDG 'AI Ethics' → 4 results
+[2026-05-06 11:49:53][Crawler]   ✓ https://en.wikipedia.org/wiki/AI_Ethics → 48 chunks (topic: AI Ethics)
+[2026-05-06 11:50:04][Crawler]   ✗ Too little text at https://en.wikipedia.org//en.wikipedia.org/wiki/Wikipedia:Contact_us
+[2026-05-06 11:50:07][Crawler]   ✓ https://en.wikipedia.org/wiki/Help:Introduction → 1 chunks (topic: AI Ethics)
+[2026-05-06 11:50:19][Crawler]   ✓ https://en.wikipedia.org/wiki/Ethics_of_artificial_intelligence → 48 chunks (topic: AI Ethics)
+[2026-05-06 11:50:23][Crawler]   ✓ https://en.wikipedia.org/wiki/Wikipedia:Contents → 2 chunks (topic: AI Ethics)
+[2026-05-06 11:50:27][Crawler]   ✓ https://en.wikipedia.org/wiki/Special:Random → 1 chunks (topic: AI Ethics)
+[2026-05-06 11:50:36][Crawler]   ✓ https://grokipedia.com/page/Ethics_of_artificial_intelligence → 31 chunks (topic: AI Ethics)
+[2026-05-06 11:50:39][Crawler]   ✓ https://grokipedia.com/ → 1 chunks (topic: AI Ethics)
+[2026-05-06 11:50:51][Crawler]   ✓ https://grokipedia.com/page/Society → 46 chunks (topic: AI Ethics)
+[2026-05-06 11:50:56][Crawler]   ✓ https://www.ibm.com/think/topics/ai-ethics → 8 chunks (topic: AI Ethics)
+[2026-05-06 11:51:01][Crawler]   ✓ https://www.ibm.com/think/author/matthew-kosinski.html → 1 chunks (topic: AI Ethics)
+[2026-05-06 11:51:05][Crawler]   ✓ https://www.ibm.com/think/topics/artificial-intelligence → 11 chunks (topic: AI Ethics)
+[2026-05-06 11:51:14][Crawler] DDG 'continuous learning AI systems' → 4 results
+[2026-05-06 11:51:17][Crawler]   ✓ https://deepgram.com/ai-glossary/continuous-learning-systems → 6 chunks (topic: continuous learning AI systems)
+[2026-05-06 11:51:25][Crawler]   ✗ Too little text at https://console.deepgram.com/signup
+[2026-05-06 11:51:28][Crawler]   ✓ https://deepgram.com/ai-glossary → 1 chunks (topic: continuous learning AI systems)
+[2026-05-06 11:51:32][Crawler]   ✓ https://www.xoriant.com/thought-leadership/article/agentic-ai-and-continuous-learning-creating-ever-evolving-systems → 1 chunks (topic: continuous learning AI systems)
+[2026-05-06 11:51:34][Crawler] Cycle done | pages:6 chunks_added:145 memory:{}
+[2026-05-06 11:51:34][Crawler] ⏳ Sleeping 180s…
+[2026-05-06 11:54:41][Crawler] DDG 'personal AI assistant development' → 4 results
+[2026-05-06 11:54:47][Crawler]   ✓ https://www.matellio.com/blog/ai-personal-assistant-app-development/ → 16 chunks (topic: personal AI assistant development)
+[2026-05-06 11:54:52][Crawler]   ✓ https://www.matellio.com/solutions/scalability-and-growth/ → 4 chunks (topic: personal AI assistant development)
+[2026-05-06 11:54:56][Crawler]   ✓ https://www.matellio.com/industries/communications-and-media/ → 2 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:02][Crawler]   ✓ https://www.vellum.ai/blog/best-open-source-personal-ai-assistants → 13 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:05][Crawler]   ✓ https://www.vellum.ai/blog → 2 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:07][Crawler]   ✗ Too little text at https://www.vellum.ai/community
+[2026-05-06 11:55:13][Crawler]   ✓ https://www.cointelligence.com/content/how-to-build-a-personal-ai-assistant/ → 5 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:17][Crawler]   ✓ https://www.cointelligence.com/content/2025/10/06/ → 1 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:20][Crawler]   ✓ https://www.cointelligence.com/ → 2 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:28][Crawler]   ✓ https://www.code-brew.com/build-ai-assistant/ → 22 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:34][Crawler]   ✓ https://www.code-brew.com/build-mobile-app/ → 6 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:38][Crawler]   ✓ https://www.code-brew.com/web-development/ → 2 chunks (topic: personal AI assistant development)
+[2026-05-06 11:55:45][Crawler] DDG 'AI Ethics' → 4 results
+[2026-05-06 11:55:48][Crawler] Cycle done | pages:6 chunks_added:60 memory:{}
+[2026-05-06 11:55:48][Crawler] ⏳ Sleeping 180s…
+[2026-05-06 11:58:55][Crawler] DDG 'algorithmic trading Python Julia' → 4 results
+[2026-05-06 11:58:57][Crawler]   ✓ https://algo-trading.readthedocs.io/en/latest/introduction-to-julia.html → 1 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:04][Crawler]   ✓ https://www.nature.com/articles/d41586-019-02310-3 → 2 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:11][Crawler]   ✓ https://juliacomputing.com/industries/banking-and-finance/ → 8 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:15][Crawler]   ✓ https://github.com/dysonance/Strategems.jl → 3 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:19][Crawler]   ✓ https://github.com/features/spark → 6 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:25][Crawler]   ✓ https://github.com/mcp → 2 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:29][Crawler]   ✓ https://blog.quantinsti.com/julia-programming/ → 4 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:33][Crawler]   ✓ https://www.quantinsti.com → 10 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:37][Crawler]   ✓ https://www.quantinsti.com/faculty → 9 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:42][Crawler]   ✓ https://www.efinancialcareers.co.uk/news/2020/11/julia-versus-python → 3 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:44][Crawler]   ✓ https://www.efinancialcareers.co.uk/news/financial → 2 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:48][Crawler]   ✓ https://bubble.efinancialcareers.com → 2 chunks (topic: algorithmic trading Python Julia)
+[2026-05-06 11:59:58][Crawler] DDG 'risk management position sizing' → 4 results
+[2026-05-06 12:00:01][Crawler]   ✗ Too little text at https://www.investopedia.com/terms/p/positionsizing.asp
+[2026-05-06 12:00:05][Crawler]   ✓ https://www.trade-ideas.com/2025/04/04/the-role-of-position-sizing-in-your-risk-management-plan/ → 4 chunks (topic: risk management position sizing)
+[2026-05-06 12:00:09][Crawler]   ✓ https://www.trade-ideas.com/download → 1 chunks (topic: risk management position sizing)
+[2026-05-06 12:00:11][Crawler]   ✓ https://www.trade-ideas.com/AccountManagement/TradingRoomPage.php → 1 chunks (topic: risk management position sizing)
+[2026-05-06 12:00:13][Crawler] Cycle done | pages:6 chunks_added:20 memory:{}
+[2026-05-06 12:00:13][Crawler] ⏳ Sleeping 180s…
