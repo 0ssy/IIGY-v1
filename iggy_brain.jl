@@ -26,6 +26,10 @@
 #   export OPENROUTER_API_KEY=sk-or-...   (optional — enables Tier 1)
 # ==============================================================================
 
+# ── Force PyCall to use iggy311 conda env (must be set before any @eval using PyCall)
+const _IGGY311 = raw"C:\Users\josep\.julia\conda\3\x86_64\envs\iggy311\python.exe"
+isfile(_IGGY311) && (ENV["PYTHON"] = _IGGY311)
+
 using Dates, JSON, Printf, HTTP
 
 
