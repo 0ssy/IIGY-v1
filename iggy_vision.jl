@@ -30,7 +30,7 @@ using JSON, Dates, HTTP, Base64
 
 # Include brain if not already loaded
 if !isdefined(Main, :absorb_screen_knowledge!)
-    if isfile("iggy_brain.jl")
+    if !isdefined(Main, :iggy_think) && isfile("iggy_brain.jl")
         include("iggy_brain.jl")
     end
 end
@@ -229,7 +229,7 @@ function read_and_learn_file!(path::String)
 
         content = if size > MAX_FILE_READ_BYTES
             # Read tail of large files (most recent content)
-            String(read(path))[max(1,end-MAX_FILE_READ_BYTES):end]
+            let _r = String(read(path)); _r[thisind(_r, max(1, lastindex(_r)-MAX_FILE_READ_BYTES)):end]; end
         else
             read(path, String)
         end
@@ -272,7 +272,7 @@ function iggy_read_url(url::String)
         # Strip HTML tags for cleaner text
         text = replace(text, r"<[^>]+>" => " ")
         text = replace(text, r"\s+" => " ")
-        text = text[1:min(length(text), MAX_FILE_READ_BYTES)]
+        text = first(text, min(length(text), MAX_FILE_READ_BYTES))
         if isdefined(Main, :absorb_screen_knowledge!)
             absorb_screen_knowledge!(text; source = "url:$url")
         end

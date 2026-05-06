@@ -120,7 +120,16 @@ end
 Calls iggy_brain.jl's store_to_knowledge_base if it is loaded in Main.
 Safe to call even if not loaded — just prints a warning.
 """
+# Dedup guard — prevents parallel tasks storing the same URL twice
+const _STORED_URLS = Set{String}()
+const _STORED_LOCK  = ReentrantLock()
+
 function store_chunks(chunks::Vector{String}, source::String, topic::String)
+    # Skip URL if already stored by another concurrent task
+    lock(_STORED_LOCK) do
+        source in _STORED_URLS && return 0
+        push!(_STORED_URLS, source)
+    end
     n = 0
     for chunk in chunks
         try

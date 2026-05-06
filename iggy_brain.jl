@@ -33,7 +33,10 @@ using Dates, JSON, Printf, HTTP
 function _safe_load_pycall()
     try
         @eval begin
-            using PyCall
+            # Point PyCall at the project .venv to avoid FieldError on missing Python path
+    venv_py = joinpath(@__DIR__, ".venv", "Scripts", "python.exe")
+    isfile(venv_py) && (ENV["PYTHON"] = venv_py)
+    @eval using PyCall
         end
         return true
     catch e
