@@ -1,0 +1,34 @@
+# ── IGGY Python Requirements ──────────────────────────────────────────────────
+# Install with:  pip install -r requirements_iggy.txt
+#
+# Then run:      python iggy_assistant.py
+#
+# First run downloads TinyLlama (~600MB) to ~/.cache/huggingface/
+# Subsequent runs are instant.
+
+# ── Core LLM ──────────────────────────────────────────────────────────────────
+transformers>=4.40.0
+torch>=2.2.0
+accelerate>=0.27.0
+
+# ── LoRA fine-tuning ──────────────────────────────────────────────────────────
+peft>=0.10.0
+datasets>=2.18.0
+
+# ── Vector memory ─────────────────────────────────────────────────────────────
+chromadb>=0.4.24
+sentence-transformers>=2.7.0
+
+# ── Web crawler ───────────────────────────────────────────────────────────────
+playwright>=1.43.0
+# After pip install, also run:  playwright install chromium
+
+# ── Screen perception ─────────────────────────────────────────────────────────
+mss>=9.0.1
+Pillow>=10.3.0
+pytesseract>=0.3.10
+pygetwindow>=0.0.9
+# Also install Tesseract-OCR:
+#   Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#   Linux:   sudo apt install tesseract-ocr
+#   macOS:   brew install tesseract
