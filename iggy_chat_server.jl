@@ -1,378 +1,251 @@
-# ─────────────────────────────────────────────────────────────────
-#  iggy_chat_server.jl  –  Browser-based chat interface for IGGY
-#  Runs on http://localhost:7171
-# ─────────────────────────────────────────────────────────────────
-# Requires:  HTTP.jl  (add with:  using Pkg; Pkg.add("HTTP"))
-# ─────────────────────────────────────────────────────────────────
+using HTTP, JSON, Sockets
 
-using HTTP, Dates, JSON
+# ─────────────────────────────────────────────────────────────────────────────
+# iggy_chat_server.jl
+#
+# Provides:
+#   CHAT_IN          :: Channel{String}   — incoming user messages from browser
+#   CHAT_OUT         :: Channel{String}   — IGGY replies destined for browser
+#   start_chat_server(; port)             — launch HTTP server (non-blocking)
+#   push_chat_stats(; btc, eth, sol, wins, losses, winrate)
+#                                         — update the live header bar
+# ─────────────────────────────────────────────────────────────────────────────
 
-# ── Shared channels between the chat server and the executive ─────
-const CHAT_IN  = Channel{String}(32)   # user message  → executive
-const CHAT_OUT = Channel{String}(32)   # IGGY response → browser
+# ── Shared channels (executive reads/writes these) ────────────────────────────
+const CHAT_IN  = Channel{String}(64)
+const CHAT_OUT = Channel{String}(64)
 
-# ── Embedded HTML / CSS / JS chat UI ─────────────────────────────
-const CHAT_HTML = raw"""
-<!DOCTYPE html>
+# ── Live stats (updated by CNS runner, read by /stats endpoint) ──────────────
+const _STATS_LOCK = ReentrantLock()
+const _stats = Dict{String,Any}(
+    "btc"     => "—",
+    "eth"     => "—",
+    "sol"     => "—",
+    "wins"    => 0,
+    "losses"  => 0,
+    "winrate" => 0.0,
+)
+
+function push_chat_stats(; btc="", eth="", sol="",
+                           wins=0, losses=0, winrate=0.0)
+    lock(_STATS_LOCK) do
+        if !isempty(btc);  _stats["btc"]     = btc;     end
+        if !isempty(eth);  _stats["eth"]     = eth;     end
+        if !isempty(sol);  _stats["sol"]     = sol;     end
+        _stats["wins"]    = wins
+        _stats["losses"]  = losses
+        _stats["winrate"] = winrate
+    end
+end
+
+# ─────────────────────────────────────────
+# HTML UI
+# ─────────────────────────────────────────
+const CHAT_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>IGGY</title>
+<title>IGGY Chat</title>
 <style>
-  :root {
-    --bg:      #0d0f14;
-    --panel:   #13161e;
-    --border:  #1e2535;
-    --accent:  #00e5ff;
-    --accent2: #7c3aed;
-    --text:    #e2e8f0;
-    --sub:     #64748b;
-    --green:   #10b981;
-    --red:     #ef4444;
-    --user-bg: #1e2535;
-    --iggy-bg: #111827;
-    --radius:  12px;
-  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }
+  body { font-family: 'Segoe UI', sans-serif; background: #0d0d0d; color: #e0e0e0;
+         display: flex; flex-direction: column; height: 100vh; }
 
-  /* ── Header ── */
-  header {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 24px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    flex-shrink: 0;
-  }
-  .avatar {
-    width: 40px; height: 40px; border-radius: 50%;
-    background: linear-gradient(135deg, var(--accent2), var(--accent));
-    display: flex; align-items: center; justify-content: center;
-    font-size: 18px; font-weight: 700; color: #fff;
-    box-shadow: 0 0 12px rgba(0,229,255,.35);
-  }
-  .header-info h1 { font-size: 16px; font-weight: 700; letter-spacing: .5px; }
-  .header-info p  { font-size: 12px; color: var(--sub); }
-  .status-dot {
-    width: 8px; height: 8px; border-radius: 50%;
-    background: var(--green);
-    box-shadow: 0 0 6px var(--green);
-    margin-left: auto;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0%,100% { opacity: 1; } 50% { opacity: .4; }
-  }
-
-  /* ── Stats bar ── */
-  #stats-bar {
-    display: flex;
-    gap: 24px;
-    padding: 8px 24px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--sub);
-    flex-shrink: 0;
-    overflow-x: auto;
-  }
-  #stats-bar span { white-space: nowrap; }
-  #stats-bar .val { color: var(--accent); font-weight: 600; }
-  #stats-bar .win { color: var(--green); }
-  #stats-bar .loss { color: var(--red); }
+  /* ── Header bar ── */
+  #header { background: #111; padding: 8px 16px; display: flex;
+            align-items: center; gap: 20px; border-bottom: 1px solid #222;
+            font-size: 0.82em; flex-wrap: wrap; }
+  #header .logo { font-weight: 700; font-size: 1.1em; color: #00d4ff;
+                  letter-spacing: 2px; margin-right: 12px; }
+  .stat { color: #aaa; }
+  .stat span { color: #00d4ff; font-weight: 600; }
+  .win  { color: #00e676 !important; }
+  .loss { color: #ff5252 !important; }
 
   /* ── Messages ── */
-  #messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
-  }
-  .msg {
-    display: flex;
-    gap: 10px;
-    max-width: 75%;
-    animation: fadein .2s ease;
-  }
-  @keyframes fadein { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
-  .msg.user  { align-self: flex-end; flex-direction: row-reverse; }
-  .msg.iggy  { align-self: flex-start; }
-  .msg .bubble {
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    line-height: 1.55;
-    word-break: break-word;
-  }
-  .msg.user  .bubble { background: var(--accent2); color: #fff; border-bottom-right-radius: 3px; }
-  .msg.iggy  .bubble { background: var(--iggy-bg); border: 1px solid var(--border); border-bottom-left-radius: 3px; }
-  .msg .mini-avatar {
-    width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 13px; font-weight: 700;
-  }
-  .msg.iggy  .mini-avatar { background: linear-gradient(135deg,var(--accent2),var(--accent)); color:#fff; }
-  .msg.user  .mini-avatar { background: var(--user-bg); color: var(--text); }
-  .timestamp { font-size: 11px; color: var(--sub); margin-top: 4px; text-align: right; }
-  .msg.iggy  .timestamp { text-align: left; }
+  #messages { flex: 1; overflow-y: auto; padding: 16px;
+              display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 72%; padding: 10px 14px; border-radius: 14px;
+            line-height: 1.5; word-break: break-word; }
+  .user  { background: #1e3a5f; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .iggy  { background: #1a1a2e; border: 1px solid #222;
+            align-self: flex-start; border-bottom-left-radius: 4px; }
+  .iggy .name { font-size: 0.75em; color: #00d4ff; margin-bottom: 4px; font-weight: 700; }
 
-  /* ── Typing indicator ── */
-  #typing { display:none; align-self: flex-start; }
-  #typing.show { display:flex; }
-  #typing .bubble { display:flex; gap:5px; align-items:center; padding: 12px 16px; }
-  .dot { width:7px; height:7px; border-radius:50%; background: var(--sub); animation: bounce .9s infinite; }
-  .dot:nth-child(2) { animation-delay: .15s; }
-  .dot:nth-child(3) { animation-delay: .3s; }
-  @keyframes bounce { 0%,60%,100% { transform:translateY(0); } 30% { transform:translateY(-6px); } }
-
-  /* ── Input ── */
-  #input-row {
-    padding: 16px 24px;
-    background: var(--panel);
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 10px;
-    flex-shrink: 0;
-  }
-  #user-input {
-    flex: 1;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px 16px;
-    color: var(--text);
-    font-size: 14px;
-    outline: none;
-    transition: border-color .2s;
-  }
-  #user-input:focus { border-color: var(--accent); }
-  #user-input::placeholder { color: var(--sub); }
-  #send-btn {
-    background: linear-gradient(135deg, var(--accent2), var(--accent));
-    border: none; border-radius: var(--radius);
-    padding: 0 20px; color: #fff;
-    font-size: 18px; cursor: pointer;
-    transition: opacity .2s, transform .1s;
-  }
-  #send-btn:hover  { opacity: .85; }
-  #send-btn:active { transform: scale(.96); }
-  #send-btn:disabled { opacity: .4; cursor: default; }
-
-  /* ── Scrollbar ── */
-  #messages::-webkit-scrollbar { width: 6px; }
-  #messages::-webkit-scrollbar-track { background: transparent; }
-  #messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  /* ── Input row ── */
+  #inputrow { display: flex; gap: 8px; padding: 12px 16px;
+              border-top: 1px solid #222; background: #111; }
+  #msgbox { flex: 1; background: #1a1a1a; border: 1px solid #333;
+            border-radius: 8px; padding: 10px 14px; color: #e0e0e0;
+            font-size: 0.95em; outline: none; resize: none; }
+  #msgbox:focus { border-color: #00d4ff; }
+  #sendbtn { background: #00d4ff; color: #000; border: none;
+             border-radius: 8px; padding: 0 22px; font-weight: 700;
+             cursor: pointer; font-size: 0.95em; }
+  #sendbtn:hover { background: #00b8d9; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="avatar">I</div>
-  <div class="header-info">
-    <h1>IGGY</h1>
-    <p>Autonomous Trading Intelligence</p>
-  </div>
-  <div class="status-dot" id="status-dot" title="Online"></div>
-</header>
-
-<div id="stats-bar">
-  <span>BTC <span class="val" id="s-btc">–</span></span>
-  <span>ETH <span class="val" id="s-eth">–</span></span>
-  <span>SOL <span class="val" id="s-sol">–</span></span>
-  <span>Wins <span class="win" id="s-wins">0</span></span>
-  <span>Losses <span class="loss" id="s-losses">0</span></span>
-  <span>Win% <span class="val" id="s-wr">0.00%</span></span>
+<div id="header">
+  <span class="logo">IGGY</span>
+  <span class="stat">BTC <span id="h-btc">—</span></span>
+  <span class="stat">ETH <span id="h-eth">—</span></span>
+  <span class="stat">SOL <span id="h-sol">—</span></span>
+  <span class="stat">W <span id="h-wins" class="win">0</span>
+                     L <span id="h-losses" class="loss">0</span>
+                     WR <span id="h-wr">0.0%</span></span>
 </div>
 
 <div id="messages">
-  <div class="msg iggy">
-    <div class="mini-avatar">I</div>
-    <div>
-      <div class="bubble">Hey! I'm IGGY — your trading intelligence. I'm live on BTC, ETH, and SOL right now. Ask me about open positions, P&amp;L, market status, or just say hi 👋</div>
-      <div class="timestamp">System</div>
-    </div>
+  <div class="bubble iggy">
+    <div class="name">IGGY</div>
+    Hello! I'm online and monitoring the markets. How can I help?
   </div>
 </div>
 
-<div class="msg iggy" id="typing">
-  <div class="mini-avatar">I</div>
-  <div class="bubble"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
-</div>
-
-<div id="input-row">
-  <input id="user-input" type="text" placeholder="Talk to IGGY…" autocomplete="off" />
-  <button id="send-btn">➤</button>
+<div id="inputrow">
+  <textarea id="msgbox" rows="1" placeholder="Message IGGY…"></textarea>
+  <button id="sendbtn">Send</button>
 </div>
 
 <script>
-  const msgs     = document.getElementById('messages');
-  const input    = document.getElementById('user-input');
-  const btn      = document.getElementById('send-btn');
-  const typing   = document.getElementById('typing');
+const messages = document.getElementById('messages');
+const msgbox   = document.getElementById('msgbox');
+const sendbtn  = document.getElementById('sendbtn');
 
-  // ── Poll for stats every 3 s ──────────────────────────────────
-  async function pollStats() {
-    try {
-      const r = await fetch('/stats');
-      if (!r.ok) return;
-      const d = await r.json();
-      if (d.btc)     document.getElementById('s-btc').textContent     = '$' + d.btc;
-      if (d.eth)     document.getElementById('s-eth').textContent     = '$' + d.eth;
-      if (d.sol)     document.getElementById('s-sol').textContent     = '$' + d.sol;
-      document.getElementById('s-wins').textContent    = d.wins    ?? 0;
-      document.getElementById('s-losses').textContent  = d.losses  ?? 0;
-      document.getElementById('s-wr').textContent      = (d.winrate ?? 0).toFixed(2) + '%';
-    } catch(_) {}
+function addBubble(text, role) {
+  const d = document.createElement('div');
+  d.className = 'bubble ' + role;
+  if (role === 'iggy') {
+    const n = document.createElement('div'); n.className = 'name'; n.textContent = 'IGGY';
+    d.appendChild(n);
   }
-  setInterval(pollStats, 3000);
-  pollStats();
+  const t = document.createElement('span'); t.textContent = text;
+  d.appendChild(t);
+  messages.appendChild(d);
+  messages.scrollTop = messages.scrollHeight;
+}
 
-  // ── Add bubble ─────────────────────────────────────────────────
-  function addMsg(who, text) {
-    const wrap = document.createElement('div');
-    wrap.className = 'msg ' + who;
-
-    const av = document.createElement('div');
-    av.className = 'mini-avatar';
-    av.textContent = who === 'iggy' ? 'I' : 'Y';
-
-    const inner = document.createElement('div');
-    const bubble = document.createElement('div');
-    bubble.className = 'bubble';
-    bubble.textContent = text;
-
-    const ts = document.createElement('div');
-    ts.className = 'timestamp';
-    ts.textContent = new Date().toLocaleTimeString();
-
-    inner.appendChild(bubble);
-    inner.appendChild(ts);
-    wrap.appendChild(av);
-    wrap.appendChild(inner);
-    msgs.appendChild(wrap);
-    msgs.scrollTop = msgs.scrollHeight;
+async function sendMessage() {
+  const text = msgbox.value.trim();
+  if (!text) return;
+  msgbox.value = '';
+  addBubble(text, 'user');
+  try {
+    const r = await fetch('/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text})
+    });
+    const d = await r.json();
+    addBubble(d.reply || '…', 'iggy');
+  } catch {
+    addBubble('[connection error]', 'iggy');
   }
+}
 
-  // ── Send ───────────────────────────────────────────────────────
-  async function send() {
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = '';
-    btn.disabled = true;
+sendbtn.addEventListener('click', sendMessage);
+msgbox.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
 
-    addMsg('user', text);
-
-    // show typing
-    msgs.appendChild(typing);
-    typing.classList.add('show');
-    msgs.scrollTop = msgs.scrollHeight;
-
-    try {
-      const r = await fetch('/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
-      });
-      const d = await r.json();
-      typing.classList.remove('show');
-      addMsg('iggy', d.response ?? '…');
-    } catch(e) {
-      typing.classList.remove('show');
-      addMsg('iggy', '⚠️ Connection error – is IGGY running?');
-    }
-
-    btn.disabled = false;
-    input.focus();
-  }
-
-  btn.addEventListener('click', send);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+// Poll live stats every 2 s
+async function pollStats() {
+  try {
+    const r = await fetch('/stats'); const d = await r.json();
+    if (d.btc)  document.getElementById('h-btc').textContent     = d.btc;
+    if (d.eth)  document.getElementById('h-eth').textContent     = d.eth;
+    if (d.sol)  document.getElementById('h-sol').textContent     = d.sol;
+    document.getElementById('h-wins').textContent    = d.wins    ?? 0;
+    document.getElementById('h-losses').textContent  = d.losses  ?? 0;
+    document.getElementById('h-wr').textContent      = (d.winrate ?? 0).toFixed(1) + '%';
+  } catch {}
+  setTimeout(pollStats, 2000);
+}
+pollStats();
 </script>
 </body>
 </html>
 """
 
-# ── Shared live stats (updated by cns_core via push_chat_stats) ──
-const _chat_stats = Ref(Dict{String,Any}(
-    "btc" => "", "eth" => "", "sol" => "",
-    "wins" => 0, "losses" => 0, "winrate" => 0.0
-))
+# ─────────────────────────────────────────
+# HTTP REQUEST ROUTER
+# ─────────────────────────────────────────
+function handle_request(req::HTTP.Request) :: HTTP.Response
+    path = req.target
 
-"""
-    push_chat_stats(; btc="", eth="", sol="", wins=0, losses=0)
-
-Call this from iggy_cns_core.jl (or anywhere) to update the stats
-shown in the browser's header bar.
-"""
-function push_chat_stats(; btc="", eth="", sol="",
-                           wins=0, losses=0, winrate=0.0)
-    _chat_stats[] = Dict{String,Any}(
-        "btc" => btc, "eth" => eth, "sol" => sol,
-        "wins" => wins, "losses" => losses, "winrate" => winrate
-    )
-end
-
-# ── HTTP request router ───────────────────────────────────────────
-function chat_router(req::HTTP.Request)
-    if req.method == "GET" && req.target == "/"
+    # ── Serve the SPA ─────────────────────────────────────────────
+    if path == "/" || path == "/index.html"
         return HTTP.Response(200,
             ["Content-Type" => "text/html; charset=utf-8"],
             body = CHAT_HTML)
+    end
 
-    elseif req.method == "GET" && req.target == "/stats"
+    # ── Live stats (polled every 2 s by browser) ──────────────────
+    if path == "/stats"
+        stats_copy = lock(_STATS_LOCK) do; copy(_stats); end
         return HTTP.Response(200,
             ["Content-Type" => "application/json"],
-            body = JSON.json(_chat_stats[]))
+            body = JSON.json(stats_copy))
+    end
 
-    elseif req.method == "POST" && req.target == "/chat"
+    # ── Chat endpoint ─────────────────────────────────────────────
+    if path == "/chat" && req.method == "POST"
         try
-            body   = JSON.parse(String(req.body))
-            msg    = get(body, "message", "")::String
-            put!(CHAT_IN, msg)                     # → executive loop
-            # wait up to 10 s for IGGY's reply
-            reply  = ""
-            t0     = time()
-            while time() - t0 < 10.0
+            body = JSON.parse(String(req.body))
+            msg  = get(body, "message", "")
+            if isempty(msg)
+                return HTTP.Response(400,
+                    ["Content-Type" => "application/json"],
+                    body = JSON.json(Dict("error" => "empty message")))
+            end
+
+            # Send to executive event loop and wait for reply
+            put!(CHAT_IN, msg)
+            reply = ""
+            timeout = time() + 60.0   # 60 s hard cap
+            while time() < timeout
                 if isready(CHAT_OUT)
-                    reply = take!(CHAT_OUT); break
+                    reply = take!(CHAT_OUT)
+                    break
                 end
-                sleep(0.05)
+                sleep(0.02)
             end
-            if reply == ""
-                reply = "I'm thinking… the trading engine kept me busy. Ask again in a moment."
-            end
+            isempty(reply) && (reply = "[IGGY is thinking… try again in a moment]")
+
             return HTTP.Response(200,
                 ["Content-Type" => "application/json"],
-                body = JSON.json(Dict("response" => reply)))
+                body = JSON.json(Dict("reply" => reply)))
         catch e
             return HTTP.Response(500,
                 ["Content-Type" => "application/json"],
-                body = JSON.json(Dict("response" => "Internal error: $e")))
+                body = JSON.json(Dict("error" => string(e))))
         end
-
-    else
-        return HTTP.Response(404, "Not found")
     end
+
+    # ── 404 ───────────────────────────────────────────────────────
+    return HTTP.Response(404, body = "Not found")
 end
 
-# ── Start the server (non-blocking) ──────────────────────────────
-function start_chat_server(; host="127.0.0.1", port=7171)
+# ─────────────────────────────────────────
+# SERVER ENTRY POINT
+# ─────────────────────────────────────────
+
+"""
+    start_chat_server(; port=7171)
+
+Launch the HTTP chat server in a background task.
+Returns immediately; the server runs on its own async task.
+"""
+function start_chat_server(; port::Int = 7171)
     @async begin
-        println("💬 IGGY Chat UI  →  http://$(host):$(port)")
-        HTTP.serve(chat_router, host, port)
+        try
+            println("💬 IGGY Chat UI  →  http://127.0.0.1:$port")
+            HTTP.serve(handle_request, "127.0.0.1", port)
+        catch e
+            println("Chat server error: $e")
+        end
     end
 end
