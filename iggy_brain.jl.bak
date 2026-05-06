@@ -27,22 +27,7 @@
 # ==============================================================================
 
 using Dates, JSON, Printf, HTTP
-
-
-# ── Safe PyCall/TinyLlama loader (fix: FieldError on missing .venv) ──────────
-function _safe_load_pycall()
-    try
-        @eval begin
-            using PyCall
-        end
-        return true
-    catch e
-        @warn "PyCall unavailable: $e — Tier 2 (local brain) disabled."
-        return false
-    end
-end
-const PYCALL_AVAILABLE = _safe_load_pycall()
-# PyCall loaded safely below
+using PyCall
 
 # ─────────────────────────────────────────
 # PYTHON MODULE — written to disk on first run, imported via PyCall
@@ -676,7 +661,7 @@ end
 function iggy_learn_file(path::String) :: String
     isfile(path) || return "File not found: $path"
     try
-        content = replace(read(path, String), "\r\n" => "\n", "\r" => "\n")[1:min(4000,length(read(path,String)))]
+        content = read(path, String)[1:min(4000,length(read(path,String)))]
         summary = iggy_think("Summarize key info in 5 bullets.\nFile: $path\n\n$content")
         remember!(IGGY_MEMORY, "system", "Learned from $path:\n$summary")
         store_to_knowledge_base(content; source=path)

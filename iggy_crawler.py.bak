@@ -1,4 +1,3 @@
-import threading
 """
 iggy_crawler.py — IGGY's self-directed web crawler  (v2)
 ─────────────────────────────────────────────────────────
@@ -28,19 +27,6 @@ import inspect
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
-# ── URL deduplication (fix: chunks were stored 4× per discovery cycle) ──
-_seen_urls: set = set()
-_seen_lock = threading.Lock()
-
-def _url_is_new(url: str) -> bool:
-    """Return True the first time a URL is seen; False on repeats."""
-    with _seen_lock:
-        if url in _seen_urls:
-            return False
-        _seen_urls.add(url)
-        return True
-
 
 # ── ddgs (renamed from duckduckgo_search) ────────────────────────────────────
 try:
@@ -406,7 +392,7 @@ def crawl_cycle(force_topic: Optional[str] = None) -> dict:
 
     _save_crawled(CRAWLED_URLS)
     stats = _mem_stats()
-    clog(f"Cycle done | pages:{pages_done} chunks_added:{total_chunks} memory:{}")
+    clog(f"Cycle done | pages:{pages_done} chunks_added:{total_chunks} memory:{stats}")
     return {"pages": pages_done, "chunks": total_chunks, "memory": stats}
 
 # ── daemon ────────────────────────────────────────────────────────────────────
