@@ -26,3 +26,21 @@
 [2026-05-06 11:43:32][Crawler]   ✗ Could not fetch https://www.zhihu.com/question/50461146
 [2026-05-06 11:43:34][Crawler] Cycle error: 'IggyMemory' object has no attribute 'get_stats'
 [2026-05-06 11:43:34][Crawler] ⏳ Sleeping 120s before next cycle…
+[2026-05-06 11:45:42][Crawler] DDG 'algorithmic trading Python Julia' → 0 results
+[2026-05-06 11:45:42][Crawler] DDG 'reinforcement learning trading' → 0 results
+[2026-05-06 11:45:42][Crawler] DDG 'Julia Language' → 0 results
+[2026-05-06 11:45:43][Crawler] DDG 'machine learning finance' → 0 results
+[2026-05-06 11:45:44][Crawler] DDG 'AI Ethics' → 0 results
+[2026-05-06 11:45:44][Crawler] DDG 'Binance futures API trading' → 0 results
+[2026-05-06 11:45:45][Crawler] DDG 'autonomous AI agent architecture' → 0 results
+[2026-05-06 11:45:46][Crawler] DDG 'risk management position sizing' → 0 results
+[2026-05-06 11:45:46][Crawler] DDG 'neural networks time series prediction' → 0 results
+[2026-05-06 11:45:47][Crawler] DDG 'EMA MACD momentum strategy' → 0 results
+[2026-05-06 11:45:47][Crawler] DDG 'Focus_Area' → 0 results
+[2026-05-06 11:45:47][Crawler] DDG 'crypto market microstructure' → 0 results
+[2026-05-06 11:45:48][Crawler] DDG 'Quantum Computing' → 0 results
+[2026-05-06 11:45:48][Crawler] DDG 'Binance Trading' → 0 results
+[2026-05-06 11:45:49][Crawler] DDG 'Personal Assistant' → 4 results
+[2026-05-06 11:45:53][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:45:53][Crawler]   ✓ https://zhidao.baidu.com/question/1894154084944516860.html → 0 chunks stored (topic: Personal Assistant)
+[2026-05-06 11:45:58][Crawler] Crawler stopped by user.
