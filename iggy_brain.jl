@@ -260,14 +260,15 @@ function load_pycall!() :: Bool
     try
         @eval using PyCall
         py_dir = dirname(abspath(PYBRAIN_FILE))
-        py"""
-import sys
-sys.path.insert(0, $py_dir)
-from iggy_brain_py import tinyllama_think, tinyllama_train, tinyllama_store
-"""
-        _py_think[] = py"tinyllama_think"
-        _py_train[] = py"tinyllama_train"
-        _py_store[] = py"tinyllama_store"
+
+        # ── Use PyCall.pyimport — safe after lazy @eval, no py"..." macros needed ──
+        sys       = PyCall.pyimport("sys")
+        sys.path.insert(0, py_dir)
+        brain_mod = PyCall.pyimport("iggy_brain_py")
+
+        _py_think[] = brain_mod.tinyllama_think
+        _py_train[] = brain_mod.tinyllama_train
+        _py_store[] = brain_mod.tinyllama_store
         _TINYLLAMA_OK[] = true
         println("🤖 TinyLlama (PyCall) loaded — Tier 2 active.")
     catch e

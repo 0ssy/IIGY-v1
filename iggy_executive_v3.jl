@@ -186,11 +186,6 @@ function cns_main_loop_runner(capital::Capital, strat::Strategy,
             # Run standard CNS step
             cns_main_loop_step(capital, strat, assets, brains, positions, kline_channel)
 
-            # Post-trade analysis: if a trade just closed, ask brain what we learned
-            # (We detect a close by watching successful_trades / failed_trades change)
-            # This is tracked inside iggy_cns_core via the close logic; we hook in here
-            # by listening to the log. A simpler hook: check if pnl changed on last bar.
-
             @printf("💰 %.2f | DD: %.2f%% | Open: %d\r",
                 capital.balance, capital.dd * 100, length(positions))
         else
