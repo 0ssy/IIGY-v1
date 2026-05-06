@@ -1,0 +1,28 @@
+[2026-05-06 11:42:45][Crawler] 🕷  IGGY crawler daemon started (self-directed mode)
+[2026-05-06 11:42:46][Crawler] DDG 'machine learning finance' → 0 results
+[2026-05-06 11:42:46][Crawler] DDG 'AI Ethics' → 0 results
+[2026-05-06 11:42:47][Crawler] DDG 'Personal Assistant' → 4 results
+[2026-05-06 11:42:49][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:49][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:49][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:49][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:49][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:49][Crawler]   ✓ https://www.myjobmag.co.ke/jobs-by-title/personal-assistant-pa → 0 chunks stored (topic: Personal Assistant)
+[2026-05-06 11:42:52][Crawler]   ✗ Too little text at https://www.careerjet.co.ke/personal-assistant-jobs/Nairobi
+[2026-05-06 11:42:55][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:55][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:55][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:55][Crawler]   ✓ https://www.corporatestaffing.co.ke/tag/personal-assistant-jobs-in-kenya/ → 0 chunks stored (topic: Personal Assistant)
+[2026-05-06 11:42:59][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:42:59][Crawler]   ✓ https://www.careerpointkenya.co.ke/tag/personal-assistant-jobs-in-kenya/ → 0 chunks stored (topic: Personal Assistant)
+[2026-05-06 11:43:00][Crawler] DDG 'Quantum Computing' → 0 results
+[2026-05-06 11:43:01][Crawler] DDG 'crypto market microstructure' → 0 results
+[2026-05-06 11:43:02][Crawler] DDG 'risk management position sizing' → 0 results
+[2026-05-06 11:43:02][Crawler] DDG 'reinforcement learning trading' → 4 results
+[2026-05-06 11:43:04][Crawler] Store error: IggyMemory.store_knowledge() got an unexpected keyword argument 'metadata'
+[2026-05-06 11:43:04][Crawler]   ✓ https://www.zhihu.com/topic/20039099/intro → 0 chunks stored (topic: reinforcement learning trading)
+[2026-05-06 11:43:17][Crawler]   ✗ Could not fetch https://www.zhihu.com/question/41775291
+[2026-05-06 11:43:25][Crawler]   ✗ Could not fetch https://www.zhihu.com/question/333671830
+[2026-05-06 11:43:32][Crawler]   ✗ Could not fetch https://www.zhihu.com/question/50461146
+[2026-05-06 11:43:34][Crawler] Cycle error: 'IggyMemory' object has no attribute 'get_stats'
+[2026-05-06 11:43:34][Crawler] ⏳ Sleeping 120s before next cycle…

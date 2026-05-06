@@ -1,272 +1,399 @@
 """
-iggy_crawler.py — IGGY's eyes on the web.
+iggy_crawler.py — IGGY's self-directed web crawler
+────────────────────────────────────────────────────
+• Uses duckduckgo-search package (no API key, no brittle HTML selectors)
+• Self-directed: derives topics from memory + domains_clean.csv + conversations
+• Falls back to Playwright for JS-heavy pages
+• Runs continuously; pass --crawl "topic" to force a one-off seed crawl
 
-Uses Playwright (real browser, handles JS sites) to crawl URLs.
-Can use your saved Google/Edge browser profile so she's logged in
-to sites you have access to.
-
-Two modes:
-  1. SEED mode   — you give it a list of URLs/topics to learn from
-  2. SCOUT mode  — continuously searches for topics IGGY needs to know about
-
-All text is stored in:
-  - IggyMemory (ChromaDB) — for retrieval during conversations
-  - iggy_train_queue.jsonl — for periodic fine-tuning
+Install:
+    pip install duckduckgo-search playwright requests beautifulsoup4 lxml
+    playwright install chromium
 """
 
-import asyncio, json, re, time
+import asyncio
+import sys
+import os
+import csv
+import json
+import time
+import hashlib
+import random
+import argparse
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
-from datetime import datetime
-from typing import List, Optional
-from urllib.parse import urlparse, urljoin
+from typing import Optional
 
-from playwright.async_api import async_playwright, Browser, BrowserContext
+# ── deps ──────────────────────────────────────────────────────────────────────
+try:
+    from duckduckgo_search import DDGS
+except ImportError:
+    print("⚠  Run: pip install duckduckgo-search")
+    sys.exit(1)
 
-# ── Config ────────────────────────────────────────────────────────────────────
-TRAIN_QUEUE   = Path("iggy_train_queue.jsonl")
-VISITED_LOG   = Path("iggy_visited_urls.txt")
-CRAWL_TOPICS  = Path("iggy_crawl_topics.txt")   # one topic/URL per line
+try:
+    import requests
+    from bs4 import BeautifulSoup
+except ImportError:
+    print("⚠  Run: pip install requests beautifulsoup4 lxml")
+    sys.exit(1)
 
-# Use your real browser profile so you're already logged in
-# Edge:   C:/Users/<you>/AppData/Local/Microsoft/Edge/User Data
-# Chrome: C:/Users/<you>/AppData/Local/Google/Chrome/User Data
-EDGE_PROFILE   = None   # set to your Edge profile path to use cookies
-CHROME_PROFILE = None   # set to your Chrome profile path
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_OK = True
+except ImportError:
+    PLAYWRIGHT_OK = False
 
-MAX_DEPTH     = 2        # how many links deep to follow
-MAX_PER_CRAWL = 30       # max pages per crawl session
-MIN_TEXT_LEN  = 200      # ignore pages with less text than this
-CHUNK_SIZE    = 600      # characters per knowledge chunk
-CRAWL_DELAY   = 1.5      # seconds between requests (be polite)
+# Memory module lives in same folder
+sys.path.insert(0, str(Path(__file__).parent))
+try:
+    from iggy_memory import IggyMemory
+    mem = IggyMemory()
+except Exception as e:
+    print(f"[Crawler] ⚠  Could not load IggyMemory: {e}")
+    mem = None
 
-# Sites to always skip
-SKIP_DOMAINS = {
-    "facebook.com", "twitter.com", "instagram.com",
-    "tiktok.com", "reddit.com",   # too noisy
-}
+# ── paths ─────────────────────────────────────────────────────────────────────
+BASE_DIR        = Path(__file__).parent
+DOMAINS_CSV     = BASE_DIR / "domains_clean.csv"
+KNOWLEDGE_CSV   = BASE_DIR / "iggy_global_knowledge.csv"
+CRAWL_LOG       = BASE_DIR / "iggy_crawl_log.txt"
+CRAWLED_CACHE   = BASE_DIR / "iggy_crawled_urls.json"   # dedup cache
 
-# ── Cleaner ───────────────────────────────────────────────────────────────────
-def clean_text(raw: str) -> str:
-    """Strip boilerplate, normalize whitespace."""
-    raw = re.sub(r'\s+', ' ', raw)
-    raw = re.sub(r'(Cookie Policy|Privacy Policy|Terms of Service|Subscribe now)[^\n]*', '', raw, flags=re.IGNORECASE)
-    return raw.strip()
+# ── defaults ──────────────────────────────────────────────────────────────────
+CRAWL_INTERVAL_SEC  = 120        # seconds between autonomous crawl cycles
+MAX_PAGES_PER_CYCLE = 8          # pages fetched per cycle
+MAX_LINKS_PER_PAGE  = 3          # deep links followed per page
+CHUNK_SIZE          = 400        # words per memory chunk
+MIN_CHUNK_WORDS     = 40         # discard very short chunks
+REQUEST_TIMEOUT     = 12         # seconds
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+]
 
-def chunk_text(text: str, source: str, topic: str = "") -> List[dict]:
-    """Split text into overlapping chunks for the memory store."""
+# ── dedup cache ───────────────────────────────────────────────────────────────
+def _load_crawled() -> set:
+    if CRAWLED_CACHE.exists():
+        try:
+            return set(json.loads(CRAWLED_CACHE.read_text()))
+        except Exception:
+            pass
+    return set()
+
+def _save_crawled(seen: set):
+    # Keep last 5000 URLs
+    lst = list(seen)[-5000:]
+    CRAWLED_CACHE.write_text(json.dumps(lst))
+
+CRAWLED_URLS: set = _load_crawled()
+
+# ── logging ───────────────────────────────────────────────────────────────────
+def clog(msg: str):
+    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{ts}][Crawler] {msg}"
+    print(line)
+    with open(CRAWL_LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+# ── topic derivation (self-directed) ─────────────────────────────────────────
+FALLBACK_TOPICS = [
+    "quantitative trading strategies",
+    "crypto market microstructure",
+    "algorithmic trading Python Julia",
+    "machine learning finance",
+    "reinforcement learning trading",
+    "Binance futures API trading",
+    "EMA MACD momentum strategy",
+    "risk management position sizing",
+    "neural networks time series prediction",
+    "autonomous AI agent architecture",
+]
+
+def _topics_from_domains_csv() -> list:
+    topics = []
+    if not DOMAINS_CSV.exists():
+        return topics
+    try:
+        with open(DOMAINS_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.reader(f):
+                if row:
+                    val = row[0].strip()
+                    if val and not val.lower().startswith("domain"):
+                        # turn domain name into search phrase
+                        phrase = val.replace("-", " ").replace(".", " ").strip()
+                        if phrase:
+                            topics.append(phrase)
+    except Exception:
+        pass
+    return topics
+
+def _topics_from_knowledge_csv() -> list:
+    """Mine recent entries in iggy_global_knowledge.csv for gap topics."""
+    topics = []
+    if not KNOWLEDGE_CSV.exists():
+        return topics
+    try:
+        entries = []
+        with open(KNOWLEDGE_CSV, newline="", encoding="utf-8") as f:
+            for row in csv.reader(f):
+                if len(row) >= 2:
+                    entries.append(row[1])   # assumption: col 1 = topic/text
+        # Take last 20, extract 2-4 word phrases as follow-up searches
+        for entry in entries[-20:]:
+            words = entry.split()[:6]
+            if len(words) >= 3:
+                topics.append(" ".join(words[:4]))
+    except Exception:
+        pass
+    return topics
+
+def _topics_from_memory() -> list:
+    """Ask memory for the least-covered topics."""
+    if mem is None:
+        return []
+    try:
+        stats = mem.get_stats()
+        # If memory is sparse, seed with fundamentals
+        if stats.get("knowledge_chunks", 0) < 50:
+            return ["quantitative trading fundamentals", "crypto technical analysis",
+                    "algorithmic trading systems"]
+    except Exception:
+        pass
+    return []
+
+def derive_topics() -> list:
+    """Compose a prioritised topic list without requiring user input."""
+    topics: list = []
+    topics.extend(_topics_from_memory())
+    topics.extend(_topics_from_domains_csv())
+    topics.extend(_topics_from_knowledge_csv())
+    # Deduplicate while preserving order
+    seen = set()
+    deduped = []
+    for t in topics:
+        key = t.lower()[:60]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(t)
+    # Always include fallbacks at the end
+    for t in FALLBACK_TOPICS:
+        key = t.lower()[:60]
+        if key not in seen:
+            seen.add(key)
+            deduped.append(t)
+    return deduped
+
+# ── DuckDuckGo search (robust) ────────────────────────────────────────────────
+def ddg_search(query: str, max_results: int = 5) -> list[dict]:
+    """Return list of {title, url, body} dicts. Never raises."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        clog(f"DDG '{query}' → {len(results)} results")
+        return results
+    except Exception as e:
+        clog(f"DDG error for '{query}': {e}")
+        return []
+
+# ── HTML fetch (requests + fallback playwright) ───────────────────────────────
+def _fetch_html_requests(url: str) -> Optional[str]:
+    headers = {"User-Agent": random.choice(USER_AGENTS)}
+    try:
+        r = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        if r.status_code == 200 and "text/html" in r.headers.get("Content-Type", ""):
+            return r.text
+    except Exception:
+        pass
+    return None
+
+async def _fetch_html_playwright(url: str) -> Optional[str]:
+    if not PLAYWRIGHT_OK:
+        return None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url, timeout=15_000, wait_until="domcontentloaded")
+            content = await page.content()
+            await browser.close()
+            return content
+    except Exception:
+        return None
+
+def fetch_page(url: str) -> Optional[str]:
+    html = _fetch_html_requests(url)
+    if html:
+        return html
+    # Playwright fallback for JS-heavy pages
+    if PLAYWRIGHT_OK:
+        return asyncio.run(_fetch_html_playwright(url))
+    return None
+
+# ── text extraction & chunking ────────────────────────────────────────────────
+def extract_text(html: str) -> str:
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        tag.decompose()
+    return " ".join(soup.get_text(separator=" ").split())
+
+def chunk_text(text: str, source: str, topic: str) -> list[dict]:
     words = text.split()
     chunks = []
-    step = CHUNK_SIZE // 2  # 50% overlap
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i + CHUNK_SIZE])
-        if len(chunk) < MIN_TEXT_LEN:
+    for i in range(0, len(words), CHUNK_SIZE):
+        window = words[i : i + CHUNK_SIZE]
+        if len(window) < MIN_CHUNK_WORDS:
             continue
+        chunk_text_str = " ".join(window)
+        uid = hashlib.md5(chunk_text_str[:80].encode()).hexdigest()[:12]
         chunks.append({
-            "text": chunk,
+            "id":     uid,
+            "text":   chunk_text_str,
             "source": source,
-            "topic": topic,
-            "timestamp": datetime.utcnow().isoformat(),
+            "topic":  topic,
+            "ts":     datetime.now().isoformat(),
         })
     return chunks
 
-# ── IggyCrawler ────────────────────────────────────────────────────────────────
-class IggyCrawler:
-    def __init__(self, memory=None):
-        """memory: IggyMemory instance (optional, but recommended)."""
-        self.memory = memory
-        self.visited = self._load_visited()
-        TRAIN_QUEUE.parent.mkdir(exist_ok=True)
+def extract_links(html: str, base_url: str) -> list[str]:
+    soup = BeautifulSoup(html, "lxml")
+    links = []
+    base_domain = re.sub(r"(https?://[^/]+).*", r"\1", base_url)
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if href.startswith("http"):
+            links.append(href)
+        elif href.startswith("/"):
+            links.append(base_domain + href)
+    # Deduplicate, exclude social / ad domains
+    bad = {"twitter.com", "facebook.com", "instagram.com", "reddit.com",
+           "youtube.com", "tiktok.com", "linkedin.com", "ads.", "doubleclick"}
+    clean = []
+    seen = set()
+    for l in links:
+        if any(b in l for b in bad):
+            continue
+        if l not in seen and l not in CRAWLED_URLS:
+            seen.add(l)
+            clean.append(l)
+    return clean[:MAX_LINKS_PER_PAGE * 4]   # oversample, pick best later
 
-    def _load_visited(self) -> set:
-        if VISITED_LOG.exists():
-            return set(VISITED_LOG.read_text().splitlines())
-        return set()
-
-    def _mark_visited(self, url: str):
-        self.visited.add(url)
-        with VISITED_LOG.open("a") as f:
-            f.write(url + "\n")
-
-    def _should_skip(self, url: str) -> bool:
+# ── store chunks ──────────────────────────────────────────────────────────────
+def store_chunks(chunks: list[dict]) -> int:
+    if not chunks:
+        return 0
+    stored = 0
+    for chunk in chunks:
         try:
-            domain = urlparse(url).netloc.lower().replace("www.", "")
-            return domain in SKIP_DOMAINS or url in self.visited
-        except:
-            return True
+            if mem:
+                mem.store_knowledge(chunk["text"], metadata={
+                    "source": chunk["source"],
+                    "topic":  chunk["topic"],
+                    "ts":     chunk["ts"],
+                })
+            stored += 1
+        except Exception as e:
+            clog(f"Store error: {e}")
+    return stored
 
-    async def _get_context(self, playwright) -> BrowserContext:
-        """Launch browser, optionally with your saved login profile."""
-        launch_args = {"headless": True, "args": ["--no-sandbox"]}
+# ── single URL crawl ──────────────────────────────────────────────────────────
+def crawl_url(url: str, topic: str, follow_links: bool = True) -> int:
+    """Fetch a URL, chunk it, store in memory. Returns chunks stored."""
+    if url in CRAWLED_URLS:
+        return 0
+    CRAWLED_URLS.add(url)
 
-        if EDGE_PROFILE:
-            browser = await playwright.chromium.launch_persistent_context(
-                EDGE_PROFILE,
-                channel="msedge",
-                headless=True,
-            )
-            return browser  # PersistentContext acts as both browser and context
+    html = fetch_page(url)
+    if not html:
+        clog(f"  ✗ Could not fetch {url}")
+        return 0
 
-        if CHROME_PROFILE:
-            browser = await playwright.chromium.launch_persistent_context(
-                CHROME_PROFILE,
-                channel="chrome",
-                headless=True,
-            )
-            return browser
+    text = extract_text(html)
+    if len(text.split()) < MIN_CHUNK_WORDS:
+        clog(f"  ✗ Too little text at {url}")
+        return 0
 
-        # Default: fresh browser, no login
-        browser = await playwright.chromium.launch(**launch_args)
-        return await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
+    chunks = chunk_text(text, source=url, topic=topic)
+    n = store_chunks(chunks)
+    clog(f"  ✓ {url} → {n} chunks stored (topic: {topic})")
 
-    async def crawl_url(self, url: str, topic: str = "", depth: int = 0) -> List[dict]:
-        """Crawl a single URL and return extracted chunks."""
-        if self._should_skip(url) or depth > MAX_DEPTH:
-            return []
+    # Follow internal links (depth-1 only)
+    total = n
+    if follow_links and n > 0:
+        links = extract_links(html, url)
+        random.shuffle(links)
+        for link in links[:MAX_LINKS_PER_PAGE]:
+            if link not in CRAWLED_URLS:
+                time.sleep(0.8)
+                total += crawl_url(link, topic, follow_links=False)
 
-        chunks = []
-        async with async_playwright() as pw:
-            ctx = await self._get_context(pw)
-            page = await ctx.new_page()
+    return total
 
-            try:
-                print(f"[Crawler] {'  ' * depth}→ {url}")
-                await page.goto(url, timeout=15000, wait_until="domcontentloaded")
-                await asyncio.sleep(CRAWL_DELAY)
+# ── one crawl cycle ───────────────────────────────────────────────────────────
+def crawl_cycle(force_topic: Optional[str] = None) -> dict:
+    topics = [force_topic] if force_topic else derive_topics()
+    random.shuffle(topics)
 
-                # Extract main text content
-                raw = await page.evaluate("""
-                    () => {
-                        // Remove noise elements
-                        ['nav','footer','header','aside','script','style',
-                         '.ad','.cookie','.popup','[role=banner]'].forEach(sel => {
-                            document.querySelectorAll(sel).forEach(el => el.remove());
-                        });
-                        return document.body?.innerText || '';
-                    }
-                """)
+    pages_done = 0
+    total_chunks = 0
 
-                text = clean_text(raw)
-                if len(text) >= MIN_TEXT_LEN:
-                    page_chunks = chunk_text(text, source=url, topic=topic)
-                    chunks.extend(page_chunks)
-                    self._mark_visited(url)
+    for topic in topics:
+        if pages_done >= MAX_PAGES_PER_CYCLE:
+            break
 
-                    # Store in IGGY's memory
-                    if self.memory:
-                        for c in page_chunks:
-                            self.memory.store_knowledge(c["text"], source=url, topic=topic)
+        results = ddg_search(topic, max_results=4)
+        if not results:
+            continue
 
-                    # Queue for fine-tuning
-                    self._queue_for_training(page_chunks)
+        for r in results:
+            if pages_done >= MAX_PAGES_PER_CYCLE:
+                break
+            url = r.get("href") or r.get("url", "")
+            if not url:
+                continue
+            # Also store the DDG snippet itself as a lightweight chunk
+            snippet = r.get("body", "")
+            if snippet and len(snippet.split()) >= MIN_CHUNK_WORDS:
+                mini_chunks = chunk_text(snippet, source=url, topic=topic)
+                total_chunks += store_chunks(mini_chunks)
 
-                    print(f"[Crawler] ✅ {len(page_chunks)} chunks from {url}")
+            total_chunks += crawl_url(url, topic)
+            pages_done += 1
+            time.sleep(1.0 + random.random())
 
-                # Follow links (depth-first, same domain)
-                if depth < MAX_DEPTH:
-                    links = await page.evaluate("""
-                        () => Array.from(document.querySelectorAll('a[href]'))
-                            .map(a => a.href)
-                            .filter(h => h.startsWith('http'))
-                            .slice(0, 10)
-                    """)
-                    base_domain = urlparse(url).netloc
-                    for link in links[:5]:
-                        if urlparse(link).netloc == base_domain and not self._should_skip(link):
-                            sub = await self.crawl_url(link, topic, depth + 1)
-                            chunks.extend(sub)
+    _save_crawled(CRAWLED_URLS)
+    stats = mem.get_stats() if mem else {}
+    clog(f"Cycle done | pages:{pages_done} chunks_added:{total_chunks} memory:{stats}")
+    return {"pages": pages_done, "chunks": total_chunks, "memory": stats}
 
-            except Exception as e:
-                print(f"[Crawler] ⚠️ Error on {url}: {e}")
-            finally:
-                await page.close()
-                if hasattr(ctx, 'close'):
-                    await ctx.close()
+# ── continuous daemon ─────────────────────────────────────────────────────────
+def run_continuous():
+    clog("🕷  IGGY crawler daemon started (self-directed mode)")
+    while True:
+        try:
+            crawl_cycle()
+        except KeyboardInterrupt:
+            clog("Crawler stopped by user.")
+            break
+        except Exception as e:
+            clog(f"Cycle error: {e}")
+        clog(f"⏳ Sleeping {CRAWL_INTERVAL_SEC}s before next cycle…")
+        time.sleep(CRAWL_INTERVAL_SEC)
 
-        return chunks
-
-    async def search_and_crawl(self, query: str, num_results: int = 5) -> List[dict]:
-        """
-        Search DuckDuckGo (no login needed) for a query and crawl the results.
-        This is how IGGY autonomously expands her knowledge.
-        """
-        search_url = f"https://duckduckgo.com/html/?q={query.replace(' ', '+')}"
-        chunks = []
-
-        async with async_playwright() as pw:
-            ctx = await self._get_context(pw)
-            page = await ctx.new_page()
-            try:
-                await page.goto(search_url, timeout=15000)
-                await asyncio.sleep(1.5)
-
-                links = await page.evaluate("""
-                    () => Array.from(document.querySelectorAll('.result__url, .result__a'))
-                        .map(a => a.href || a.textContent)
-                        .filter(h => h && h.startsWith('http'))
-                        .slice(0, 8)
-                """)
-                await page.close()
-                await ctx.close()
-
-                print(f"[Crawler] Searching '{query}' → {len(links)} results")
-                for link in links[:num_results]:
-                    result = await self.crawl_url(link, topic=query)
-                    chunks.extend(result)
-
-            except Exception as e:
-                print(f"[Crawler] Search error: {e}")
-
-        return chunks
-
-    def _queue_for_training(self, chunks: List[dict]):
-        """Append chunks to the training queue for periodic LoRA fine-tuning."""
-        with TRAIN_QUEUE.open("a") as f:
-            for c in chunks:
-                # Format as instruction-following text for the model
-                entry = {
-                    "text": (
-                        f"<|system|>\n{c.get('topic', 'Knowledge')}</s>\n"
-                        f"<|user|>\nWhat do you know about this?</s>\n"
-                        f"<|assistant|>\n{c['text']}</s>"
-                    )
-                }
-                f.write(json.dumps(entry) + "\n")
-
-    # ── Continuous Discovery Loop ──────────────────────────────────────────────
-    async def run_discovery_loop(self, interval_minutes: int = 30):
-        """
-        Continuously crawl topics from iggy_crawl_topics.txt.
-        Add URLs or search queries to that file, one per line.
-        IGGY will keep expanding her knowledge automatically.
-        """
-        print(f"[Crawler] Discovery loop started. Checking every {interval_minutes}min.")
-        while True:
-            if CRAWL_TOPICS.exists():
-                topics = [t.strip() for t in CRAWL_TOPICS.read_text().splitlines() if t.strip()]
-                for topic in topics:
-                    if topic.startswith("http"):
-                        await self.crawl_url(topic, topic=topic)
-                    else:
-                        await self.search_and_crawl(topic, num_results=3)
-                    await asyncio.sleep(5)
-            await asyncio.sleep(interval_minutes * 60)
-
-# ── CLI entrypoint ─────────────────────────────────────────────────────────────
+# ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import sys
-    from iggy_memory import IggyMemory
+    parser = argparse.ArgumentParser(description="IGGY web crawler")
+    parser.add_argument("--crawl", type=str, default="",
+                        help="One-off topic to crawl, then exit")
+    parser.add_argument("--daemon", action="store_true",
+                        help="Run continuously (default if no --crawl given)")
+    args = parser.parse_args()
 
-    mem = IggyMemory()
-    crawler = IggyCrawler(memory=mem)
-
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
-        if query.startswith("http"):
-            asyncio.run(crawler.crawl_url(query))
-        else:
-            asyncio.run(crawler.search_and_crawl(query))
+    if args.crawl:
+        result = crawl_cycle(force_topic=args.crawl)
+        print(f"Done. Memory: {result['memory']}")
     else:
-        # Start continuous discovery loop
-        asyncio.run(crawler.run_discovery_loop())
+        run_continuous()
