@@ -18,7 +18,7 @@
 #   • Thread-safe Python inference lock
 #
 # Fixed bug from original iggy_brain.py:
-#   DF9ZLKQYdApUeA9S1XhuHFyNqvw6PShRLC → DF9ZLKQYdApUeA9S1XhuHFyNqvw6PShRLC
+#   DataCollatorForLanguageModelling → DataCollatorForLanguageModelling
 #
 # Setup:
 #   pip install torch transformers datasets peft chromadb
@@ -75,7 +75,7 @@ import torch
 from transformers import (
     AutoTokenizer, AutoModelForCausalLM,
     TrainingArguments, Trainer,
-    DF9ZLKQYdApUeA9S1XhuHFyNqvw6PShRLC,
+    DataCollatorForLanguageModelling,
 )
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
@@ -207,7 +207,7 @@ class IggyBrain:
         )
         Trainer(
             model=peft_model, args=args, train_dataset=dataset,
-            data_collator=DF9ZLKQYdApUeA9S1XhuHFyNqvw6PShRLC(self.tokenizer, mlm=False),
+            data_collator=DataCollatorForLanguageModelling(self.tokenizer, mlm=False),
         ).train()
         peft_model.save_pretrained(str(ADAPTER_DIR))
         with ARCHIVE.open("a") as f:
