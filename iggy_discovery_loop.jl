@@ -126,10 +126,10 @@ const _STORED_LOCK  = ReentrantLock()
 
 function store_chunks(chunks::Vector{String}, source::String, topic::String)
     # Skip URL if already stored by another concurrent task
-    lock(_STORED_LOCK) do
-        source in _STORED_URLS && return 0
-        push!(_STORED_URLS, source)
+    _already = lock(_STORED_LOCK) do
+        source in _STORED_URLS ? true : (push!(_STORED_URLS, source); false)
     end
+    _already && return 0
     n = 0
     for chunk in chunks
         try

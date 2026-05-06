@@ -34,7 +34,7 @@ function _safe_load_pycall()
     try
         @eval begin
             # Point PyCall at the project .venv to avoid FieldError on missing Python path
-    venv_py = joinpath(@__DIR__, ".venv", "Scripts", "python.exe")
+    venv_py = raw"C:\Users\josep\.julia\conda\3\x86_64\envs\iggy311\python.exe"
     isfile(venv_py) && (ENV["PYTHON"] = venv_py)
     @eval using PyCall
         end
