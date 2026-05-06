@@ -10,6 +10,10 @@ using HTTP, Gumbo, Cascadia, CSV, DataFrames, Dates, Printf
 
 module IggyTransformer
 
+# IggyOntology is defined in Main (loaded by iggy_executive.jl before this file).
+# Modules have isolated scope, so we must explicitly import it.
+import Main.IggyOntology
+
 # ─────────────────────────────────────────
 # DOMAIN KNOWLEDGE INGESTION
 # ─────────────────────────────────────────
