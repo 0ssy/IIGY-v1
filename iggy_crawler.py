@@ -1,13 +1,15 @@
 """
-iggy_crawler.py — IGGY's self-directed web crawler
-────────────────────────────────────────────────────
-• Uses duckduckgo-search package (no API key, no brittle HTML selectors)
-• Self-directed: derives topics from memory + domains_clean.csv + conversations
-• Falls back to Playwright for JS-heavy pages
-• Runs continuously; pass --crawl "topic" to force a one-off seed crawl
+iggy_crawler.py — IGGY's self-directed web crawler  (v2)
+─────────────────────────────────────────────────────────
+Fixes vs v1:
+  • Uses `ddgs` package (duckduckgo_search was renamed — pip install ddgs)
+  • store_knowledge() called with positional text only; source/topic stored
+    via ChromaDB metadata through a safe wrapper that handles any signature
+  • get_stats() fallback added for IggyMemory objects that don't expose it
+  • Per-search sleep added to avoid DDG rate-limiting (was causing 0 results)
 
-Install:
-    pip install duckduckgo-search playwright requests beautifulsoup4 lxml
+Install / upgrade:
+    pip install ddgs playwright requests beautifulsoup4 lxml
     playwright install chromium
 """
 
@@ -21,16 +23,22 @@ import hashlib
 import random
 import argparse
 import re
-from datetime import datetime, timedelta
+import inspect
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-# ── deps ──────────────────────────────────────────────────────────────────────
+# ── ddgs (renamed from duckduckgo_search) ────────────────────────────────────
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 except ImportError:
-    print("⚠  Run: pip install duckduckgo-search")
-    sys.exit(1)
+    try:                                   # fallback: old name still installed
+        from duckduckgo_search import DDGS
+        import warnings
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
+    except ImportError:
+        print("⚠  Run: pip install ddgs")
+        sys.exit(1)
 
 try:
     import requests
@@ -45,29 +53,78 @@ try:
 except ImportError:
     PLAYWRIGHT_OK = False
 
-# Memory module lives in same folder
+# ── IggyMemory (safe loader) ──────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
-try:
-    from iggy_memory import IggyMemory
-    mem = IggyMemory()
-except Exception as e:
-    print(f"[Crawler] ⚠  Could not load IggyMemory: {e}")
-    mem = None
+mem = None
+_mem_store_sig = None   # will be inspected once
+
+def _load_memory():
+    global mem, _mem_store_sig
+    try:
+        from iggy_memory import IggyMemory
+        mem = IggyMemory()
+        # Inspect the actual store_knowledge signature once
+        sig = inspect.signature(mem.store_knowledge)
+        _mem_store_sig = list(sig.parameters.keys())
+        print(f"[Crawler] store_knowledge params: {_mem_store_sig}")
+    except Exception as e:
+        print(f"[Crawler] ⚠  Could not load IggyMemory: {e}")
+        mem = None
+
+_load_memory()
+
+def _mem_store(text: str, source: str = "", topic: str = "") -> bool:
+    """Call store_knowledge however this version of IggyMemory expects it."""
+    if mem is None:
+        return False
+    try:
+        params = _mem_store_sig or []
+        if "metadata" in params:
+            mem.store_knowledge(text, metadata={"source": source, "topic": topic})
+        elif "source" in params and "topic" in params:
+            mem.store_knowledge(text, source=source, topic=topic)
+        elif "source" in params:
+            mem.store_knowledge(text, source=source)
+        else:
+            mem.store_knowledge(text)
+        return True
+    except Exception as e:
+        clog(f"Store error: {e}")
+        return False
+
+def _mem_stats() -> dict:
+    if mem is None:
+        return {}
+    try:
+        if hasattr(mem, "get_stats"):
+            return mem.get_stats()
+        # Fallback: read ChromaDB counts directly
+        stats = {}
+        if hasattr(mem, "knowledge_collection"):
+            stats["knowledge_chunks"] = mem.knowledge_collection.count()
+        if hasattr(mem, "conv_collection"):
+            stats["conversations"] = mem.conv_collection.count()
+        return stats
+    except Exception:
+        return {}
 
 # ── paths ─────────────────────────────────────────────────────────────────────
-BASE_DIR        = Path(__file__).parent
-DOMAINS_CSV     = BASE_DIR / "domains_clean.csv"
-KNOWLEDGE_CSV   = BASE_DIR / "iggy_global_knowledge.csv"
-CRAWL_LOG       = BASE_DIR / "iggy_crawl_log.txt"
-CRAWLED_CACHE   = BASE_DIR / "iggy_crawled_urls.json"   # dedup cache
+BASE_DIR      = Path(__file__).parent
+DOMAINS_CSV   = BASE_DIR / "domains_clean.csv"
+KNOWLEDGE_CSV = BASE_DIR / "iggy_global_knowledge.csv"
+CRAWL_LOG     = BASE_DIR / "iggy_crawl_log.txt"
+CRAWLED_CACHE = BASE_DIR / "iggy_crawled_urls.json"
 
-# ── defaults ──────────────────────────────────────────────────────────────────
-CRAWL_INTERVAL_SEC  = 120        # seconds between autonomous crawl cycles
-MAX_PAGES_PER_CYCLE = 8          # pages fetched per cycle
-MAX_LINKS_PER_PAGE  = 3          # deep links followed per page
+# ── config ────────────────────────────────────────────────────────────────────
+CRAWL_INTERVAL_SEC  = 180        # seconds between autonomous cycles
+MAX_PAGES_PER_CYCLE = 6          # pages to fetch per cycle
+MAX_LINKS_PER_PAGE  = 2          # deep links to follow per page
 CHUNK_SIZE          = 400        # words per memory chunk
-MIN_CHUNK_WORDS     = 40         # discard very short chunks
-REQUEST_TIMEOUT     = 12         # seconds
+MIN_CHUNK_WORDS     = 40
+REQUEST_TIMEOUT     = 12
+DDG_SLEEP_MIN       = 2.5        # min seconds between DDG queries (rate limit)
+DDG_SLEEP_MAX       = 5.0        # max seconds between DDG queries
+
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -85,32 +142,38 @@ def _load_crawled() -> set:
     return set()
 
 def _save_crawled(seen: set):
-    # Keep last 5000 URLs
-    lst = list(seen)[-5000:]
-    CRAWLED_CACHE.write_text(json.dumps(lst))
+    CRAWLED_CACHE.write_text(json.dumps(list(seen)[-5000:]))
 
 CRAWLED_URLS: set = _load_crawled()
 
 # ── logging ───────────────────────────────────────────────────────────────────
 def clog(msg: str):
-    ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}][Crawler] {msg}"
     print(line)
-    with open(CRAWL_LOG, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    try:
+        with open(CRAWL_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
-# ── topic derivation (self-directed) ─────────────────────────────────────────
+# ── topic derivation ──────────────────────────────────────────────────────────
 FALLBACK_TOPICS = [
     "quantitative trading strategies",
-    "crypto market microstructure",
+    "crypto technical analysis indicators",
     "algorithmic trading Python Julia",
-    "machine learning finance",
-    "reinforcement learning trading",
-    "Binance futures API trading",
-    "EMA MACD momentum strategy",
+    "machine learning finance applications",
+    "reinforcement learning trading systems",
+    "Binance futures API guide",
+    "EMA MACD momentum trading",
     "risk management position sizing",
-    "neural networks time series prediction",
-    "autonomous AI agent architecture",
+    "neural networks time series forecasting",
+    "autonomous AI agent architecture design",
+    "WebSocket real-time data processing",
+    "crypto market microstructure",
+    "personal AI assistant development",
+    "continuous learning AI systems",
+    "RAG retrieval augmented generation",
 ]
 
 def _topics_from_domains_csv() -> list:
@@ -121,18 +184,15 @@ def _topics_from_domains_csv() -> list:
         with open(DOMAINS_CSV, newline="", encoding="utf-8") as f:
             for row in csv.reader(f):
                 if row:
-                    val = row[0].strip()
-                    if val and not val.lower().startswith("domain"):
-                        # turn domain name into search phrase
-                        phrase = val.replace("-", " ").replace(".", " ").strip()
-                        if phrase:
-                            topics.append(phrase)
+                    val    = row[0].strip()
+                    phrase = val.replace("-", " ").replace(".", " ").strip()
+                    if phrase and not phrase.lower().startswith("domain"):
+                        topics.append(phrase)
     except Exception:
         pass
     return topics
 
 def _topics_from_knowledge_csv() -> list:
-    """Mine recent entries in iggy_global_knowledge.csv for gap topics."""
     topics = []
     if not KNOWLEDGE_CSV.exists():
         return topics
@@ -141,8 +201,7 @@ def _topics_from_knowledge_csv() -> list:
         with open(KNOWLEDGE_CSV, newline="", encoding="utf-8") as f:
             for row in csv.reader(f):
                 if len(row) >= 2:
-                    entries.append(row[1])   # assumption: col 1 = topic/text
-        # Take last 20, extract 2-4 word phrases as follow-up searches
+                    entries.append(row[1])
         for entry in entries[-20:]:
             words = entry.split()[:6]
             if len(words) >= 3:
@@ -151,45 +210,29 @@ def _topics_from_knowledge_csv() -> list:
         pass
     return topics
 
-def _topics_from_memory() -> list:
-    """Ask memory for the least-covered topics."""
-    if mem is None:
-        return []
-    try:
-        stats = mem.get_stats()
-        # If memory is sparse, seed with fundamentals
-        if stats.get("knowledge_chunks", 0) < 50:
-            return ["quantitative trading fundamentals", "crypto technical analysis",
-                    "algorithmic trading systems"]
-    except Exception:
-        pass
-    return []
-
 def derive_topics() -> list:
-    """Compose a prioritised topic list without requiring user input."""
     topics: list = []
-    topics.extend(_topics_from_memory())
-    topics.extend(_topics_from_domains_csv())
-    topics.extend(_topics_from_knowledge_csv())
-    # Deduplicate while preserving order
-    seen = set()
-    deduped = []
-    for t in topics:
+    stats = _mem_stats()
+    if stats.get("knowledge_chunks", 0) < 50:
+        topics += ["quantitative trading fundamentals",
+                   "crypto technical analysis",
+                   "algorithmic trading systems Julia"]
+    topics += _topics_from_domains_csv()
+    topics += _topics_from_knowledge_csv()
+    seen   = set()
+    result = []
+    for t in topics + FALLBACK_TOPICS:
         key = t.lower()[:60]
         if key not in seen:
             seen.add(key)
-            deduped.append(t)
-    # Always include fallbacks at the end
-    for t in FALLBACK_TOPICS:
-        key = t.lower()[:60]
-        if key not in seen:
-            seen.add(key)
-            deduped.append(t)
-    return deduped
+            result.append(t)
+    return result
 
-# ── DuckDuckGo search (robust) ────────────────────────────────────────────────
-def ddg_search(query: str, max_results: int = 5) -> list[dict]:
-    """Return list of {title, url, body} dicts. Never raises."""
+# ── DDG search (with rate-limit sleep) ───────────────────────────────────────
+def ddg_search(query: str, max_results: int = 5) -> list:
+    """Returns list of result dicts. Sleeps before each call to avoid rate limits."""
+    sleep_t = random.uniform(DDG_SLEEP_MIN, DDG_SLEEP_MAX)
+    time.sleep(sleep_t)
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
@@ -199,24 +242,23 @@ def ddg_search(query: str, max_results: int = 5) -> list[dict]:
         clog(f"DDG error for '{query}': {e}")
         return []
 
-# ── HTML fetch (requests + fallback playwright) ───────────────────────────────
+# ── HTML fetching ─────────────────────────────────────────────────────────────
 def _fetch_html_requests(url: str) -> Optional[str]:
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     try:
-        r = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        r = requests.get(url, headers=headers,
+                         timeout=REQUEST_TIMEOUT, allow_redirects=True)
         if r.status_code == 200 and "text/html" in r.headers.get("Content-Type", ""):
             return r.text
     except Exception:
         pass
     return None
 
-async def _fetch_html_playwright(url: str) -> Optional[str]:
-    if not PLAYWRIGHT_OK:
-        return None
+async def _fetch_html_playwright_async(url: str) -> Optional[str]:
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
-            page = await browser.new_page()
+            page    = await browser.new_page()
             await page.goto(url, timeout=15_000, wait_until="domcontentloaded")
             content = await page.content()
             await browser.close()
@@ -228,9 +270,11 @@ def fetch_page(url: str) -> Optional[str]:
     html = _fetch_html_requests(url)
     if html:
         return html
-    # Playwright fallback for JS-heavy pages
     if PLAYWRIGHT_OK:
-        return asyncio.run(_fetch_html_playwright(url))
+        try:
+            return asyncio.run(_fetch_html_playwright_async(url))
+        except Exception:
+            pass
     return None
 
 # ── text extraction & chunking ────────────────────────────────────────────────
@@ -240,68 +284,51 @@ def extract_text(html: str) -> str:
         tag.decompose()
     return " ".join(soup.get_text(separator=" ").split())
 
-def chunk_text(text: str, source: str, topic: str) -> list[dict]:
-    words = text.split()
+def chunk_text(text: str, source: str, topic: str) -> list:
+    words  = text.split()
     chunks = []
     for i in range(0, len(words), CHUNK_SIZE):
-        window = words[i : i + CHUNK_SIZE]
+        window = words[i: i + CHUNK_SIZE]
         if len(window) < MIN_CHUNK_WORDS:
             continue
-        chunk_text_str = " ".join(window)
-        uid = hashlib.md5(chunk_text_str[:80].encode()).hexdigest()[:12]
         chunks.append({
-            "id":     uid,
-            "text":   chunk_text_str,
+            "text":   " ".join(window),
             "source": source,
             "topic":  topic,
-            "ts":     datetime.now().isoformat(),
         })
     return chunks
 
-def extract_links(html: str, base_url: str) -> list[str]:
-    soup = BeautifulSoup(html, "lxml")
-    links = []
-    base_domain = re.sub(r"(https?://[^/]+).*", r"\1", base_url)
+def extract_links(html: str, base_url: str) -> list:
+    soup   = BeautifulSoup(html, "lxml")
+    base   = re.sub(r"(https?://[^/]+).*", r"\1", base_url)
+    bad    = {"twitter.com", "facebook.com", "instagram.com", "reddit.com",
+              "youtube.com", "tiktok.com", "linkedin.com", "doubleclick",
+              "zhihu.com"}   # zhihu blocks requests
+    links  = []
+    seen   = set()
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
-        if href.startswith("http"):
-            links.append(href)
-        elif href.startswith("/"):
-            links.append(base_domain + href)
-    # Deduplicate, exclude social / ad domains
-    bad = {"twitter.com", "facebook.com", "instagram.com", "reddit.com",
-           "youtube.com", "tiktok.com", "linkedin.com", "ads.", "doubleclick"}
-    clean = []
-    seen = set()
-    for l in links:
-        if any(b in l for b in bad):
+        if href.startswith("/"):
+            href = base + href
+        if not href.startswith("http"):
             continue
-        if l not in seen and l not in CRAWLED_URLS:
-            seen.add(l)
-            clean.append(l)
-    return clean[:MAX_LINKS_PER_PAGE * 4]   # oversample, pick best later
+        if any(b in href for b in bad):
+            continue
+        if href not in seen and href not in CRAWLED_URLS:
+            seen.add(href)
+            links.append(href)
+    return links[: MAX_LINKS_PER_PAGE * 4]
 
-# ── store chunks ──────────────────────────────────────────────────────────────
-def store_chunks(chunks: list[dict]) -> int:
-    if not chunks:
-        return 0
+# ── store ─────────────────────────────────────────────────────────────────────
+def store_chunks(chunks: list) -> int:
     stored = 0
     for chunk in chunks:
-        try:
-            if mem:
-                mem.store_knowledge(chunk["text"], metadata={
-                    "source": chunk["source"],
-                    "topic":  chunk["topic"],
-                    "ts":     chunk["ts"],
-                })
+        if _mem_store(chunk["text"], chunk["source"], chunk["topic"]):
             stored += 1
-        except Exception as e:
-            clog(f"Store error: {e}")
     return stored
 
-# ── single URL crawl ──────────────────────────────────────────────────────────
+# ── crawl one URL ─────────────────────────────────────────────────────────────
 def crawl_url(url: str, topic: str, follow_links: bool = True) -> int:
-    """Fetch a URL, chunk it, store in memory. Returns chunks stored."""
     if url in CRAWLED_URLS:
         return 0
     CRAWLED_URLS.add(url)
@@ -317,27 +344,25 @@ def crawl_url(url: str, topic: str, follow_links: bool = True) -> int:
         return 0
 
     chunks = chunk_text(text, source=url, topic=topic)
-    n = store_chunks(chunks)
-    clog(f"  ✓ {url} → {n} chunks stored (topic: {topic})")
+    n      = store_chunks(chunks)
+    clog(f"  ✓ {url} → {n} chunks (topic: {topic})")
 
-    # Follow internal links (depth-1 only)
-    total = n
     if follow_links and n > 0:
         links = extract_links(html, url)
         random.shuffle(links)
         for link in links[:MAX_LINKS_PER_PAGE]:
             if link not in CRAWLED_URLS:
                 time.sleep(0.8)
-                total += crawl_url(link, topic, follow_links=False)
+                crawl_url(link, topic, follow_links=False)
 
-    return total
+    return n
 
-# ── one crawl cycle ───────────────────────────────────────────────────────────
+# ── one full cycle ────────────────────────────────────────────────────────────
 def crawl_cycle(force_topic: Optional[str] = None) -> dict:
-    topics = [force_topic] if force_topic else derive_topics()
+    topics     = [force_topic] if force_topic else derive_topics()
     random.shuffle(topics)
 
-    pages_done = 0
+    pages_done   = 0
     total_chunks = 0
 
     for topic in topics:
@@ -354,42 +379,41 @@ def crawl_cycle(force_topic: Optional[str] = None) -> dict:
             url = r.get("href") or r.get("url", "")
             if not url:
                 continue
-            # Also store the DDG snippet itself as a lightweight chunk
+
+            # Store snippet directly (fast, no HTTP needed)
             snippet = r.get("body", "")
             if snippet and len(snippet.split()) >= MIN_CHUNK_WORDS:
-                mini_chunks = chunk_text(snippet, source=url, topic=topic)
-                total_chunks += store_chunks(mini_chunks)
+                total_chunks += store_chunks(
+                    chunk_text(snippet, source=url, topic=topic))
 
             total_chunks += crawl_url(url, topic)
-            pages_done += 1
+            pages_done   += 1
             time.sleep(1.0 + random.random())
 
     _save_crawled(CRAWLED_URLS)
-    stats = mem.get_stats() if mem else {}
+    stats = _mem_stats()
     clog(f"Cycle done | pages:{pages_done} chunks_added:{total_chunks} memory:{stats}")
     return {"pages": pages_done, "chunks": total_chunks, "memory": stats}
 
-# ── continuous daemon ─────────────────────────────────────────────────────────
+# ── daemon ────────────────────────────────────────────────────────────────────
 def run_continuous():
-    clog("🕷  IGGY crawler daemon started (self-directed mode)")
+    clog("🕷  IGGY crawler daemon — self-directed")
     while True:
         try:
             crawl_cycle()
         except KeyboardInterrupt:
-            clog("Crawler stopped by user.")
+            clog("Stopped.")
             break
         except Exception as e:
             clog(f"Cycle error: {e}")
-        clog(f"⏳ Sleeping {CRAWL_INTERVAL_SEC}s before next cycle…")
+        clog(f"⏳ Sleeping {CRAWL_INTERVAL_SEC}s…")
         time.sleep(CRAWL_INTERVAL_SEC)
 
-# ── entry point ───────────────────────────────────────────────────────────────
+# ── entry ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="IGGY web crawler")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--crawl", type=str, default="",
-                        help="One-off topic to crawl, then exit")
-    parser.add_argument("--daemon", action="store_true",
-                        help="Run continuously (default if no --crawl given)")
+                        help="Force a single topic then exit")
     args = parser.parse_args()
 
     if args.crawl:
