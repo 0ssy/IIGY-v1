@@ -36,10 +36,12 @@ end
 function initialize_iggy_state()
     kg = IggyOntology.KnowledgeGraph()
 
-    # Seed core ontology
-    IggyOntology.add_entity!(kg, :IGGY, IggyOntology.TYPE_AI_SYSTEM)
+    # Seed core ontology.
+    # TYPE_AI_SYSTEM does not exist in iggy_ontology.jl — TYPE_DOMAIN is the
+    # closest available type.  add_relationship! also doesn't exist; use add_fact!.
+    IggyOntology.add_entity!(kg, :IGGY, IggyOntology.TYPE_DOMAIN)
     IggyOntology.add_entity!(kg, :User, IggyOntology.TYPE_USER)
-    IggyOntology.add_relationship!(kg, :IGGY, IggyOntology.PRED_IS_ASSISTANT_OF, :User)
+    IggyOntology.add_fact!(kg, :IGGY, IggyOntology.PRED_IS_ASSISTANT_OF, :User)
     IggyOntology.add_fact!(kg, :IGGY, IggyOntology.PRED_HAS_CREATOR, :User)
 
     fm = FeedbackModule()

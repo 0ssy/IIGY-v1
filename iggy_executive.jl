@@ -8,6 +8,7 @@ include("iggy_graph_traversal.jl")
 include("iggy_perception_parser.jl")
 include("iggy_cns_core.jl")          # defines Capital, Strategy, Asset, Brain, Position
 include("iggy_bridge.jl")            # defines iggy_interact / initialize_iggy_state
+include("iggy_transformer.jl")       # defines IggyTransformer module (used by discovery loop)
 include("iggy_discovery_loop.jl")    # defines run_sovereign_discovery_loop (top-level)
 include("iggy_chat_server.jl")       # defines start_chat_server / CHAT_IN / CHAT_OUT / push_chat_stats
 include("iggy_python_bridge.jl")     # defines IggyPythonBridge.ask_brain

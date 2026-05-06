@@ -6,8 +6,12 @@ using CSV, DataFrames, HTTP, JSON, Dates
 # NOT:                 IggyDiscoveryLoop.run_sovereign_discovery_loop(...)
 # ─────────────────────────────────────────────────────────────────────────────
 
-include("iggy_ontology.jl")
-include("iggy_transformer.jl")
+# ── NOTE ──────────────────────────────────────────────────────────────────────
+# Do NOT include iggy_ontology.jl or iggy_transformer.jl here.
+# iggy_executive.jl is the single entry point and loads all dependencies first.
+# Re-including creates a second definition of IggyOntology.KnowledgeGraph which
+# is a different type to the first, causing convert MethodErrors at runtime.
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ─────────────────────────────────────────
 # 1. INGESTION ENGINE
