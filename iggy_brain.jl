@@ -676,7 +676,7 @@ end
 function iggy_learn_file(path::String) :: String
     isfile(path) || return "File not found: $path"
     try
-        content = replace(read(path, String), "\r\n" => "\n", "\r" => "\n")[1:min(4000,length(read(path,String)))]
+        content = let _s = replace(read(path, String), "\r\n" => "\n", "\r" => "\n"); _s[1:nextind(_s, 0, min(4000, length(_s)))]; end
         summary = iggy_think("Summarize key info in 5 bullets.\nFile: $path\n\n$content")
         remember!(IGGY_MEMORY, "system", "Learned from $path:\n$summary")
         store_to_knowledge_base(content; source=path)

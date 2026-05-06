@@ -550,8 +550,13 @@ function connect(symbol::String)
                 end
             end
         catch e
-            println("⚠️ RECONNECT $symbol | $(typeof(e))")
-            sleep(2)
+            if !isa(e, InterruptException)
+                println("⚠️ RECONNECT $symbol | $(typeof(e))")
+                sleep(min(backoff, 60))
+                backoff = min(backoff * 2, 60)
+            else
+                break
+            end
         end
     end
 end
