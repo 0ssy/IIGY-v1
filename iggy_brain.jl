@@ -27,6 +27,7 @@
 # ==============================================================================
 
 using Dates, JSON, Printf, HTTP
+using PyCall
 
 # ─────────────────────────────────────────
 # PYTHON MODULE — written to disk on first run, imported via PyCall
