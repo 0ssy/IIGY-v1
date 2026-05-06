@@ -36,7 +36,7 @@
     ".\\iggy_vault.jl": 1.7777210531019306e9,
     ".\\iggy_vault_data.json": 1.777785219474253e9,
     ".\\iggy_vision.jl": 1.7780759898279333e9,
-    ".\\iggy_vision_memory.json": 1.7780800141270607e9,
+    ".\\iggy_vision_memory.json": 1.7780885596795347e9,
     ".\\iggy_world_view.txt": 1.7778891383037586e9,
     ".\\live_trade.jl": 1.7778977037958412e9,
     ".\\market_data.json": 1.7776297303126118e9,
@@ -48,5 +48,5 @@
     ".\\test_import.py": 1.7780878560900626e9,
     ".\\test_live.jl": 1.7778898238451424e9
   },
-  "saved_at": "2026-05-06T20:22:29.067"
+  "saved_at": "2026-05-06T20:31:02.310"
 }

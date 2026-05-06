@@ -12,9 +12,9 @@ from pathlib import Path
 from datetime import datetime
 import torch
 from transformers import (
-    AutoTokenizer, AutoModelForCausalLM,
+     AutoModelForCausalLM,
     TrainingArguments, Trainer,
-    DataCollatorForLanguageModelling,
+    DataCollatorForLanguageModeling 
 )
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
@@ -146,7 +146,7 @@ class IggyBrain:
         )
         Trainer(
             model=peft_model, args=args, train_dataset=dataset,
-            data_collator=DataCollatorForLanguageModelling(self.tokenizer, mlm=False),
+            data_collator=DataCollatorForLanguageModeling(self.tokenizer, mlm=False),
         ).train()
         peft_model.save_pretrained(str(ADAPTER_DIR))
         with ARCHIVE.open("a") as f:
