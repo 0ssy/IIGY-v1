@@ -41,7 +41,7 @@ include("iggy_graph_traversal.jl")
 include("iggy_perception_parser.jl")
 include("iggy_cns_core.jl")           # Trading engine (Capital, Strategy, Asset, Position)
 include("iggy_bridge.jl")             # IGGYState, initialize_iggy_state
-include("iggy_brain_merged.jl")       # LLM brain (iggy_think, iggy_learn, etc.)
+include("iggy_brain.jl")       # LLM brain (iggy_think, iggy_learn, etc.)
 include("iggy_discovery_loop.jl")     # World knowledge acquisition
 include("iggy_vision.jl")             # Screen learning & perception
 
@@ -50,7 +50,7 @@ include("iggy_vision.jl")             # Screen learning & perception
 # ──────────────────────────────────────────────────────────────────────────
 
 const IGGY_VERSION = "4.5-Merged"
-const LOG_FILE = "iggy_executive_merged.log"
+const LOG_FILE = "iggy_executive_v4.5.log"
 const CHAT_PORT = 8765
 
 # Browser chat channels
