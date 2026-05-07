@@ -259,7 +259,11 @@ function run_repl(iggy::IGGYState)
 
     while true
         print("You > ")
-        raw = readline()
+       raw = try
+    readline()
+catch e
+    isa(e, EOFError) ? "exit" : ""
+end
         input = strip(raw)
         isempty(input) && continue
 

@@ -34,21 +34,13 @@ using Dates, JSON, Printf, HTTP
 
 
 # ── Safe PyCall/TinyLlama loader (fix: FieldError on missing .venv) ──────────
-function _safe_load_pycall()
-    try
-        @eval begin
-            # Point PyCall at the project .venv to avoid FieldError on missing Python path
-    venv_py = raw"C:\Users\josep\iggy_py311\Scripts\python.exe"
-    isfile(venv_py) && (ENV["PYTHON"] = venv_py)
-    @eval using PyCall
-        end
-        return true
-    catch e
-        @warn "PyCall unavailable: $e — Tier 2 (local brain) disabled."
-        return false
-    end
+const PYCALL_AVAILABLE = try
+    using PyCall
+    true
+catch e
+    @warn "PyCall unavailable: $e — Tier 2 disabled."
+    false
 end
-const PYCALL_AVAILABLE = _safe_load_pycall()
 # PyCall loaded safely below
 
 # ─────────────────────────────────────────
@@ -73,9 +65,11 @@ from pathlib import Path
 from datetime import datetime
 import torch
 from transformers import (
-     AutoModelForCausalLM,
-    TrainingArguments, Trainer,
-    DataCollatorForLanguageModeling 
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    TrainingArguments,
+    Trainer,
+    DataCollatorForLanguageModeling,
 )
 from datasets import Dataset
 from peft import LoraConfig, get_peft_model, TaskType, PeftModel
@@ -259,7 +253,7 @@ def tinyllama_store(text, source="iggy"):
 
 function ensure_pybrain_file()
     current = isfile(PYBRAIN_FILE) ? read(PYBRAIN_FILE, String) : ""
-    if current != PYBRAIN_SOURCE
+    if !isfile(PYBRAIN_FILE)
         write(PYBRAIN_FILE, PYBRAIN_SOURCE)
         println("🐍 iggy_brain_py.py written.")
     end
@@ -281,14 +275,10 @@ function load_pycall!() :: Bool
     _PYCALL_LOADED[] && return _TINYLLAMA_OK[]
     _PYCALL_LOADED[] = true
     try
-        @eval using PyCall
-        py_dir = dirname(abspath(PYBRAIN_FILE))
-
-        # ── Use PyCall.pyimport — safe after lazy @eval, no py"..." macros needed ──
+        py_dir    = dirname(abspath(PYBRAIN_FILE))
         sys       = PyCall.pyimport("sys")
         sys.path.insert(0, py_dir)
         brain_mod = PyCall.pyimport("iggy_brain_py")
-
         _py_think[] = brain_mod.tinyllama_think
         _py_train[] = brain_mod.tinyllama_train
         _py_store[] = brain_mod.tinyllama_store
@@ -305,14 +295,30 @@ end
 # CONSTANTS
 # ─────────────────────────────────────────
 
-const BRAIN_PATH    = "iggy_brain_v1.bin"
-const DATA_PATH     = joinpath(@__DIR__, "SovereignData")
-const INSIGHTS_FILE = "iggy_brain_insights.json"
-const TRAIN_QUEUE   = "iggy_train_queue.jsonl"
 
-const OR_API_URL      = "https://openrouter.ai/api/v1/chat/completions"
-const OR_CHAT_MODEL   = "qwen/qwen3-235b-a22b:free"
-const OR_QUANT_MODEL  = "qwen/qwen3-235b-a22b:free"
+
+if !isdefined(@__MODULE__, :BRAIN_PATH)
+    const BRAIN_PATH = "iggy_brain_v1.bin"
+end
+if !isdefined(@__MODULE__, :DATA_PATH)
+    const DATA_PATH = joinpath(@__DIR__, "SovereignData")
+end
+if !isdefined(@__MODULE__, :INSIGHTS_FILE)
+    const INSIGHTS_FILE = "iggy_brain_insights.json"
+end
+if !isdefined(@__MODULE__, :TRAIN_QUEUE)
+    const TRAIN_QUEUE   = "iggy_train_queue.jsonl"
+end
+
+if !isdefined(@__MODULE__, :OR_API_URL)
+    const OR_API_URL      = "https://openrouter.ai/api/v1/chat/completions"
+end
+if !isdefined(@__MODULE__, :OR_CHAT_MODEL)
+    const OR_CHAT_MODEL   = "qwen/qwen3-235b-a22b:free"
+end
+if !isdefined(@__MODULE__, :OR_QUANT_MODEL)
+    const OR_QUANT_MODEL  = "qwen/qwen3-235b-a22b:free"
+end
 
 function get_or_key()
     k = get(ENV, "OPENROUTER_API_KEY", "")
@@ -335,7 +341,7 @@ function remember!(mem::ConversationMemory, role::String, content::String)
     length(mem.history) > mem.max_turns * 2 && deleteat!(mem.history, 1)
 end
 
-const IGGY_MEMORY   = ConversationMemory(20)
+IGGY_MEMORY   = ConversationMemory(20)
 const IGGY_INSIGHTS = String[]
 
 # ─────────────────────────────────────────

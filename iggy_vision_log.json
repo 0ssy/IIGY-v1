@@ -1,0 +1,26 @@
+[
+  {
+    "kind": "Julia code",
+    "size": 31468,
+    "source": ".\\iggy_brain.jl",
+    "ts": "2026-05-07T10:29:53.453"
+  },
+  {
+    "kind": "Julia code",
+    "size": 14043,
+    "source": ".\\iggy_executive_v3.jl",
+    "ts": "2026-05-07T10:29:53.455"
+  },
+  {
+    "kind": "JSON data",
+    "size": 896,
+    "source": ".\\iggy_vision_log.json",
+    "ts": "2026-05-07T10:29:53.458"
+  },
+  {
+    "kind": "JSON data",
+    "size": 2483,
+    "source": ".\\iggy_vision_memory.json",
+    "ts": "2026-05-07T10:29:53.459"
+  }
+]

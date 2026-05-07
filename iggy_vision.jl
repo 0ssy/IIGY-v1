@@ -1,204 +1,48 @@
 # ═══════════════════════════════════════════════════════════════
-# IGGY VISION — Screen Learning Module
+# IGGY VISION — Screen Learning + File Watcher Module v3.0
 #
-# What it does:
-#   1. Takes periodic screenshots (cross-platform)
-#   2. Sends image to OpenRouter vision model (Gemini Flash — free)
-#   3. Extracts useful knowledge: text, prices, charts, apps, code
-#   4. Feeds extracted insights into iggy_brain
-#   5. Watches specific files/folders for new content
-#   6. Auto-reads documents, CSVs, logs it finds
+# Split of responsibilities:
+#   Julia (this file) → file/folder watcher, document ingestion,
+#                       persistence, runtime commands
+#   Python (iggy_vision.py) → live screen watching, OCR, activity
+#                              detection, ChromaDB feeding
 #
-# Setup:
-#   Linux:  sudo apt install scrot tesseract-ocr
-#   Mac:    built-in screencapture command (no install needed)
-#   Windows: uses PowerShell screenshot
+# No screenshots. No image uploads. No API calls for vision.
+# The screen is watched live by iggy_vision.py (started automatically
+# by iggy_brain_py.py when the Python brain initializes).
 #
-# Single key: OPENROUTER_API_KEY
+# What this file does:
+#   1. Watches folders for new/changed files and auto-reads them
+#   2. Feeds file content into IGGY's knowledge base
+#   3. Handles manual  read <path>  and  url <link>  commands
+#   4. Persists file-read state so it doesn't re-read old files
 # ═══════════════════════════════════════════════════════════════
 
-function ensure(pkg)
-    try eval(Meta.parse("using $pkg"))
-    catch
-        @eval import Pkg; Pkg.add(String(pkg))
-        eval(Meta.parse("using $pkg"))
-    end
-end
-
-ensure(:JSON); ensure(:Dates); ensure(:HTTP); ensure(:Base64)
-using JSON, Dates, HTTP, Base64
-
-# Include brain if not already loaded
-if !isdefined(Main, :absorb_screen_knowledge!)
-    if !isdefined(Main, :iggy_think) && isfile("iggy_brain.jl")
-        include("iggy_brain.jl")
-    end
-end
+using JSON, Dates, HTTP
 
 # ─────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────
-const VISION_INTERVAL_SEC  = 30          # screenshot every 30s (adjust as needed)
-const SCREENSHOT_PATH      = "/tmp/iggy_screen.png"
-const VISION_LOG_FILE      = "iggy_vision_log.json"
-const WATCHED_EXTENSIONS   = [".csv", ".txt", ".log", ".json", ".md", ".jl", ".py"]
-const WATCHED_DIRS         = ["."]       # add more: ["/path/to/charts", "C:/Users/..."]
-const MAX_FILE_READ_BYTES  = 8_000       # max bytes to read from a watched file
-const VISION_MEMORY_FILE   = "iggy_vision_memory.json"
 
-# Track which files we've already read to avoid re-reading
-file_read_timestamps = Dict{String, Float64}()
-vision_log = Vector{Dict{String,Any}}()
+const WATCHED_EXTENSIONS  = [".csv", ".txt", ".log", ".json", ".md", ".jl", ".py"]
+const WATCHED_DIRS        = String["."]      # add paths at runtime with iggy_watch_dir!()
+const MAX_FILE_READ_BYTES = 8_000
+const VISION_MEMORY_FILE  = "iggy_vision_memory.json"
+const VISION_LOG_FILE     = "iggy_vision_log.json"
+const FILE_SCAN_INTERVAL  = 5               # seconds between file scans
 
 # ─────────────────────────────────────────
-# PLATFORM DETECTION
+# STATE
 # ─────────────────────────────────────────
-function get_os()
-    if Sys.iswindows() return :windows
-    elseif Sys.isapple() return :mac
-    else return :linux
-    end
-end
+
+const file_read_timestamps = Dict{String, Float64}()
+const vision_log           = Vector{Dict{String,Any}}()
 
 # ─────────────────────────────────────────
-# SCREENSHOT
+# FILE WATCHER
+# Scans watched dirs for new or changed files and learns from them
 # ─────────────────────────────────────────
-function take_screenshot!(path::String = SCREENSHOT_PATH)
-    os = get_os()
-    try
-        if os == :mac
-            run(`screencapture -x $path`)
-        elseif os == :linux
-            # Try scrot first, fall back to import (ImageMagick)
-            if success(`which scrot`)
-                run(`scrot $path`)
-            elseif success(`which import`)
-                run(`import -window root $path`)
-            elseif success(`which gnome-screenshot`)
-                run(`gnome-screenshot -f $path`)
-            else
-                println("⚠️  No screenshot tool found. Install scrot: sudo apt install scrot")
-                return false
-            end
-        elseif os == :windows
-            # PowerShell screenshot
-            ps_cmd = """
-Add-Type -AssemblyName System.Windows.Forms
-\$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-\$bmp = New-Object System.Drawing.Bitmap(\$screen.Width, \$screen.Height)
-\$g = [System.Drawing.Graphics]::FromImage(\$bmp)
-\$g.CopyFromScreen(\$screen.Location, [System.Drawing.Point]::Empty, \$screen.Size)
-\$bmp.Save('$(replace(path, "/" => "\\"))')
-"""
-            run(`powershell -Command $ps_cmd`)
-        end
-        return isfile(path)
-    catch e
-        println("⚠️  Screenshot failed: $e")
-        return false
-    end
-end
 
-# ─────────────────────────────────────────
-# READ SCREENSHOT AS BASE64
-# ─────────────────────────────────────────
-function screenshot_to_base64(path::String = SCREENSHOT_PATH)
-    isfile(path) || return ""
-    try
-        return base64encode(read(path))
-    catch e
-        println("⚠️  Base64 encode failed: $e")
-        return ""
-    end
-end
-
-# ─────────────────────────────────────────
-# VISION ANALYSIS PROMPT
-# Tells the model what to extract
-# ─────────────────────────────────────────
-const VISION_EXTRACT_PROMPT = """
-You are IGGY's vision module. Analyze this screenshot and extract:
-
-1. APP CONTEXT: What app or website is open? What is the user doing?
-2. TEXT CONTENT: Any important text, numbers, prices, data visible?
-3. CHARTS/GRAPHS: If financial charts are visible, what asset, timeframe, and patterns do you see?
-4. TRADING SIGNALS: Any price levels, indicators, or market information?
-5. KNOWLEDGE: Any new facts, concepts, or processes worth learning?
-
-Format each finding as:
-APP: <app name and activity>
-TEXT: <important text snippets>
-CHART: <chart details if any, else NONE>
-TRADING: <trading info if any, else NONE>
-LEARN: <key takeaway to remember>
-
-Be concise. Only include what is clearly visible. Skip NONE items."""
-
-# ─────────────────────────────────────────
-# PROCESS SCREENSHOT WITH VISION MODEL
-# ─────────────────────────────────────────
-function process_screenshot!(path::String = SCREENSHOT_PATH)
-    b64 = screenshot_to_base64(path)
-    isempty(b64) && return
-
-    println("👁️  Analyzing screen...")
-
-    # Call vision model via iggy_brain
-    if isdefined(Main, :openrouter_vision_call)
-        analysis = openrouter_vision_call(b64, VISION_EXTRACT_PROMPT)
-    else
-        println("⚠️  iggy_brain not loaded — cannot call vision model")
-        return
-    end
-
-    if startswith(analysis, "ERROR")
-        println("⚠️  Vision error: $analysis")
-        return
-    end
-
-    println("👁️  Screen content:\n$analysis\n")
-
-    # Log it
-    entry = Dict{String,Any}("ts" => string(now()), "analysis" => analysis,
-                              "source" => "screenshot")
-    push!(vision_log, entry)
-    if length(vision_log) > 500; popfirst!(vision_log); end
-    save_vision_log!()
-
-    # Feed into brain knowledge
-    if isdefined(Main, :absorb_screen_knowledge!)
-        absorb_screen_knowledge!(analysis; source = "screen")
-    end
-
-    # Check for trading info specifically
-    if contains(lowercase(analysis), "chart") || contains(lowercase(analysis), "price") ||
-       contains(lowercase(analysis), "trading")
-        extract_chart_insights!(analysis)
-    end
-end
-
-# ─────────────────────────────────────────
-# EXTRACT CHART / TRADING INSIGHTS
-# ─────────────────────────────────────────
-function extract_chart_insights!(analysis::String)
-    # Parse CHART and TRADING lines and feed to brain as high-priority
-    chart_info = ""
-    for line in split(analysis, "\n")
-        if startswith(strip(line), "CHART:") || startswith(strip(line), "TRADING:")
-            chart_info *= strip(line) * "\n"
-        end
-    end
-    if !isempty(chart_info) && !contains(chart_info, "NONE")
-        println("📈 Chart data detected: $chart_info")
-        if isdefined(Main, :absorb_screen_knowledge!)
-            absorb_screen_knowledge!(chart_info; source = "chart_on_screen")
-        end
-    end
-end
-
-# ─────────────────────────────────────────
-# FILE WATCHER — reads new/changed files
-# ─────────────────────────────────────────
 function scan_watched_files!()
     for dir in WATCHED_DIRS
         isdir(dir) || continue
@@ -228,27 +72,37 @@ function read_and_learn_file!(path::String)
         size == 0 && return
 
         content = if size > MAX_FILE_READ_BYTES
-            # Read tail of large files (most recent content)
-            let _r = String(read(path)); _r[thisind(_r, max(1, lastindex(_r)-MAX_FILE_READ_BYTES)):end]; end
+            raw = read(path, String)
+            raw[thisind(raw, max(1, lastindex(raw) - MAX_FILE_READ_BYTES)):end]
         else
             read(path, String)
         end
 
-        println("📂 Reading: $path ($(size) bytes)")
-
-        # Determine context based on extension
         _, ext = splitext(path)
-        context = if ext == ".csv"   "CSV data file"
-                  elseif ext == ".log" "log file"
-                  elseif ext == ".jl"  "Julia source code"
-                  elseif ext == ".py"  "Python source code"
-                  elseif ext == ".json" "JSON data"
-                  else "text file"
-                  end
+        kind = Dict(
+            ".csv"  => "CSV data",
+            ".log"  => "log file",
+            ".jl"   => "Julia code",
+            ".py"   => "Python code",
+            ".json" => "JSON data",
+            ".md"   => "markdown document",
+        )
+        label = get(kind, lowercase(ext), "text file")
 
-        if isdefined(Main, :absorb_screen_knowledge!)
-            absorb_screen_knowledge!(content; source = "file:$(basename(path))")
-        end
+        println("📂 IGGY reading $(label): $(basename(path)) ($(size) bytes)")
+
+        # Feed into brain knowledge base
+        store_to_knowledge_base(content; source = "file:$(basename(path))")
+
+        # Log the event
+        entry = Dict{String,Any}(
+            "ts"     => string(now()),
+            "source" => path,
+            "size"   => size,
+            "kind"   => label,
+        )
+        push!(vision_log, entry)
+        length(vision_log) > 500 && popfirst!(vision_log)
 
     catch e
         println("⚠️  Cannot read $path: $e")
@@ -256,51 +110,57 @@ function read_and_learn_file!(path::String)
 end
 
 # ─────────────────────────────────────────
-# MANUAL FILE INGESTION (called by user)
+# MANUAL FILE + URL INGESTION
+# Called from the REPL: read <path> / url <link>
 # ─────────────────────────────────────────
+
 function iggy_read_file(path::String)
     isfile(path) || (println("File not found: $path"); return)
-    println("📖 IGGY reading: $path")
+    println("📖 IGGY learning from: $path")
     read_and_learn_file!(path)
 end
 
 function iggy_read_url(url::String)
     println("🌐 IGGY fetching: $url")
     try
-        res  = HTTP.get(url; readtimeout=15)
-        text = String(res.body)
-        # Strip HTML tags for cleaner text
-        text = replace(text, r"<[^>]+>" => " ")
-        text = replace(text, r"\s+" => " ")
-        text = first(text, min(length(text), MAX_FILE_READ_BYTES))
-        if isdefined(Main, :absorb_screen_knowledge!)
-            absorb_screen_knowledge!(text; source = "url:$url")
-        end
+        res  = HTTP.get(url; readtimeout=15, status_exception=false)
+        res.status == 200 || (println("⚠️  HTTP $(res.status) for $url"); return)
+        raw  = String(res.body)
+        text = replace(replace(raw, r"<[^>]+>" => " "), r"\s+" => " ")
+        text = text[1:min(length(text), MAX_FILE_READ_BYTES)]
+        store_to_knowledge_base(text; source = "url:$url")
+        println("✅ Learned from $url")
     catch e
-        println("⚠️  URL fetch failed: $e")
+        println("⚠️  URL fetch failed: $(typeof(e))")
     end
+end
+
+# ─────────────────────────────────────────
+# ADD WATCHED DIRECTORY AT RUNTIME
+# ─────────────────────────────────────────
+
+function iggy_watch_dir!(path::String)
+    isdir(path) || (println("Not a directory: $path"); return)
+    path in WATCHED_DIRS && (println("Already watching: $path"); return)
+    push!(WATCHED_DIRS, path)
+    println("👁  Now watching: $path")
 end
 
 # ─────────────────────────────────────────
 # PERSISTENCE
 # ─────────────────────────────────────────
-function save_vision_log!()
-    try
-        open(VISION_LOG_FILE, "w") do f
-            JSON.print(f, vision_log[max(1,end-100):end], 2)
-        end
-    catch; end
-end
 
 function load_vision_state!()
     isfile(VISION_MEMORY_FILE) || return
     try
         d = JSON.parsefile(VISION_MEMORY_FILE)
-        for (k,v) in get(d, "file_timestamps", Dict())
+        for (k, v) in get(d, "file_timestamps", Dict())
             file_read_timestamps[k] = Float64(v)
         end
-        println("👁️  Vision state loaded.")
-    catch; end
+        println("👁  Vision file state loaded ($(length(file_read_timestamps)) files tracked).")
+    catch e
+        println("⚠️  Vision state load error: $e")
+    end
 end
 
 function save_vision_state!()
@@ -308,81 +168,74 @@ function save_vision_state!()
         open(VISION_MEMORY_FILE, "w") do f
             JSON.print(f, Dict(
                 "file_timestamps" => file_read_timestamps,
-                "saved_at"        => string(now())
+                "saved_at"        => string(now()),
             ), 2)
         end
     catch; end
 end
 
+function save_vision_log!()
+    try
+        open(VISION_LOG_FILE, "w") do f
+            JSON.print(f, vision_log[max(1, end-100):end], 2)
+        end
+    catch; end
+end
+
 # ─────────────────────────────────────────
-# STATUS DISPLAY
+# STATUS
 # ─────────────────────────────────────────
+
 function vision_status()
-    println("\n── IGGY VISION STATUS ────────────────")
-    println("  Screenshots processed: $(length(vision_log))")
-    println("  Files tracked:         $(length(file_read_timestamps))")
-    println("  Watched dirs:          $(join(WATCHED_DIRS, ", "))")
-    println("  Screenshot interval:   $(VISION_INTERVAL_SEC)s")
-    if isdefined(Main, :screen_knowledge)
-        println("  Screen insights:       $(length(screen_knowledge))")
-    end
-    println("─────────────────────────────────────\n")
+    println("\n── IGGY VISION STATUS ────────────────────────────")
+    println("  File watcher   : active")
+    println("  Screen watcher : Python (iggy_vision.py) — always on")
+    println("  Files tracked  : $(length(file_read_timestamps))")
+    println("  Files logged   : $(length(vision_log))")
+    println("  Watched dirs   : $(join(WATCHED_DIRS, ", "))")
+    println("──────────────────────────────────────────────────\n")
 end
 
 # ─────────────────────────────────────────
 # MAIN VISION LOOP
+# Called by iggy_executive_v3.jl via start_vision()
+# Screen watching is already running inside Python —
+# this loop handles files only.
 # ─────────────────────────────────────────
-function run_vision_loop(; screenshot::Bool = true, file_watch::Bool = true,
-                           interval::Int = VISION_INTERVAL_SEC)
+
+function run_vision_loop(; file_watch::Bool = true)
     load_vision_state!()
-    println("👁️  IGGY VISION started")
-    println("   Screenshot: $screenshot | File watch: $file_watch | Interval: $(interval)s")
+
+    println("👁  IGGY Vision (Julia) started — file watcher active.")
+    println("   Screen watching → Python (iggy_vision.py) already running.")
 
     tick = 0
     while true
         try
             tick += 1
 
-            # File watcher runs every cycle
             if file_watch
                 scan_watched_files!()
             end
 
-            # Screenshot runs on interval
-            if screenshot && tick % max(1, interval ÷ 5) == 0
-                if take_screenshot!()
-                    process_screenshot!()
-                end
-            end
-
-            # Save state periodically
-            if tick % 20 == 0
+            # Save state every 2 minutes
+            if tick % (120 ÷ FILE_SCAN_INTERVAL) == 0
                 save_vision_state!()
-                save_brain_state!()
+                save_vision_log!()
             end
 
         catch e
             println("⚠️  Vision loop error: $e")
         end
 
-        sleep(5)  # base tick = 5 seconds
+        sleep(FILE_SCAN_INTERVAL)
     end
 end
 
 # ─────────────────────────────────────────
-# ADD WATCHED DIRECTORY AT RUNTIME
+# STANDALONE RUN
 # ─────────────────────────────────────────
-function iggy_watch_dir!(path::String)
-    isdir(path) || (println("Not a directory: $path"); return)
-    push!(WATCHED_DIRS, path)
-    println("👁️  Now watching: $path")
-end
 
-# ─────────────────────────────────────────
-# AUTO-RUN
-# ─────────────────────────────────────────
 if abspath(PROGRAM_FILE) == @__FILE__
     run_vision_loop()
 end
-
-
