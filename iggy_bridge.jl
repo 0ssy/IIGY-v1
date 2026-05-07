@@ -47,8 +47,8 @@ function initialize_iggy_state()
     fm = FeedbackModule()
 
     # CNS components
-    cns_capital   = Capital(1000.0, 1000.0, 0.0)
-    cns_strategy  = Strategy(1.0, Float64[], 0.0)
+   cns_capital   = Capital(1000.0, 0.0, 1000.0, 0.0, 1000.0)
+    cns_strategy  = Strategy("Adaptive-Merged", 0.02, 0.1, 2.0, 1.0, :sideways)
     cns_assets    = Dict{String,Asset}()
     cns_brains    = Dict{String,Brain}()
     cns_positions = Dict{String,Position}()

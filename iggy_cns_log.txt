@@ -710,3 +710,13 @@ Transfer-Encoding: chunked
 [2026-05-06 12:09:02][INFO] LOSS ANALYSIS ETHUSDT: side=LONG entry=2394.6300 exit=2392.6800 bias_at_entry=-1.000
 [2026-05-06 12:09:04][TRADE] CLOSE SOLUSDT LONG @ 88.8200 | SL pnl:-0.149284 cumulative:-0.149284 [❌ LOSS]
 [2026-05-06 12:09:04][INFO] LOSS ANALYSIS SOLUSDT: side=LONG entry=88.9300 exit=88.8200 bias_at_entry=-1.000
+[2026-05-07 17:31:41] IGGY v4.5-Merged initializing...
+[2026-05-07 17:31:41] State initialization warning: MethodError(convert, (String, 1.0), 0x00000000000098ef) (continuing with minimal state)
+[2026-05-07 17:31:41] Brain initialized
+[2026-05-07 17:31:42] Browser server error: UndefVarError(:iggy, 0x00000000000098ef, Main)
+[2026-05-07 17:31:42] Discovery loop start error: UndefVarError(:iggy, 0x00000000000098ef, Main)
+[2026-05-07 17:31:42] Vision loop start error: UndefVarError(:iggy, 0x00000000000098ef, Main)
+[2026-05-07 17:31:42] Status monitor error: UndefVarError(:iggy, 0x00000000000098ef, Main)
+[2026-05-07 17:31:42] Symbol thread started: BTCUSDT
+[2026-05-07 17:31:42] Symbol thread started: ETHUSDT
+[2026-05-07 17:31:42] Symbol thread started: SOLUSDT
